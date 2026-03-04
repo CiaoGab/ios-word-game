@@ -35,23 +35,51 @@ enum Resolver {
     static func initialState(
         rows: Int = GameState.defaultRows,
         cols: Int = GameState.defaultCols,
+        template: BoardTemplate? = nil,
         moves: Int = GameState.defaultMoves,
         dictionary: WordDictionary,
-        bag: inout LetterBag
+        bag: inout LetterBag,
+        lockObjectiveTarget: Int? = nil
     ) -> GameState {
+        let resolvedTemplate: BoardTemplate
+        if let template {
+            resolvedTemplate = template
+        } else {
+            let size = max(rows, cols)
+            resolvedTemplate = BoardTemplate.full(
+                gridSize: size,
+                id: "legacy_full_\(size)x\(size)",
+                name: "Legacy Full \(size)x\(size)"
+            )
+        }
+        let lockTarget = lockObjectiveTarget ?? targetLocks
+
         var initial = GameState(
-            rows: rows,
-            cols: cols,
-            tiles: generateFilledTiles(rows: rows, cols: cols, bag: &bag),
+            rows: resolvedTemplate.rows,
+            cols: resolvedTemplate.cols,
+            boardTemplate: resolvedTemplate,
+            tiles: generateFilledTiles(template: resolvedTemplate, bag: &bag),
             score: 0,
             moves: moves,
             inkPoints: 0,
             usedTileIds: [],
             totalLocksBroken: 0,
-            lockObjectiveTarget: targetLocks
+            lockObjectiveTarget: lockTarget
         )
 
-        ensureTargetLocks(state: &initial)
+        ensureTargetLocks(state: &initial, requiredLocks: lockTarget)
+
+        #if DEBUG
+        let rareTally = initial.tiles.compactMap { $0 }.reduce(into: [Character: Int]()) { tally, tile in
+            let letter = tile.letter
+            if LetterBag.rareCaps.keys.contains(letter) || ["V", "W", "Y"].contains(letter) {
+                tally[letter, default: 0] += 1
+            }
+        }
+        let tallyStr = rareTally.keys.sorted().map { "\($0):\(rareTally[$0]!)" }.joined(separator: " ")
+        print("[Board] rare/uncommon tile counts — \(tallyStr.isEmpty ? "none" : tallyStr)")
+        #endif
+
         return initial
     }
 
@@ -73,7 +101,7 @@ enum Resolver {
         dictionary: WordDictionary,
         bag: inout LetterBag
     ) -> ResolverResult {
-        if let rejection = validatePath(path, rows: state.rows, cols: state.cols) {
+        if let rejection = validatePath(path, template: state.boardTemplate) {
             return rejected(state: state, reason: rejection, path: path, submittedWord: "")
         }
 
@@ -81,9 +109,23 @@ enum Resolver {
             return rejected(state: state, reason: .emptyTile, path: path, submittedWord: "")
         }
 
-        guard let acceptedWord = dictionary.matchedWordEitherDirection(rawWord) else {
+        #if DEBUG
+        let reversedWord = String(rawWord.reversed())
+        let matched: String
+        if dictionary.contains(rawWord) {
+            matched = "forward"
+        } else if dictionary.contains(reversedWord) {
+            matched = "reverse (rejected — forward-only)"
+        } else {
+            matched = "none"
+        }
+        print("[Resolver] path=\(path) word='\(rawWord)' reversed='\(reversedWord)' match=\(matched)")
+        #endif
+
+        guard dictionary.contains(rawWord) else {
             return rejected(state: state, reason: .notInDictionary, path: path, submittedWord: rawWord)
         }
+        let acceptedWord = rawWord
 
         var newState = state
         var events: [GameEvent] = []
@@ -91,7 +133,7 @@ enum Resolver {
         var lockBreakIndices: [Int] = []
 
         for index in path {
-            guard var tile = newState.tiles[index] else { continue }
+            guard var tile = newState.tiles[index], tile.isLetterTile else { continue }
             newState.usedTileIds.insert(tile.id)
 
             switch tile.freshness {
@@ -132,7 +174,7 @@ enum Resolver {
         }
 
         applyGravityAndSpawn(state: &newState, events: &events, bag: &bag)
-        ensureTargetLocks(state: &newState)
+        ensureTargetLocks(state: &newState, requiredLocks: newState.lockObjectiveTarget)
 
         let scoreDelta = newState.score - state.score
         let movesDelta = newState.moves - state.moves
@@ -156,7 +198,12 @@ enum Resolver {
     }
 
     private static func applyGravityAndSpawn(state: inout GameState, events: inout [GameEvent], bag: inout LetterBag) {
-        let gravityResult = Gravity.apply(tiles: state.tiles, rows: state.rows, cols: state.cols)
+        let gravityResult = Gravity.apply(
+            tiles: state.tiles,
+            rows: state.rows,
+            cols: state.cols,
+            template: state.boardTemplate
+        )
         state.tiles = gravityResult.tiles
 
         if !gravityResult.drops.isEmpty {
@@ -168,6 +215,7 @@ enum Resolver {
             emptyIndices: gravityResult.emptyIndices,
             rows: state.rows,
             cols: state.cols,
+            template: state.boardTemplate,
             bag: &bag
         )
 
@@ -177,11 +225,11 @@ enum Resolver {
         }
     }
 
-    private static func ensureTargetLocks(state: inout GameState) {
+    private static func ensureTargetLocks(state: inout GameState, requiredLocks: Int) {
         let currentLockedCount = countLockedTiles(in: state.tiles)
-        guard currentLockedCount < targetLocks else { return }
+        guard currentLockedCount < requiredLocks else { return }
 
-        let needed = targetLocks - currentLockedCount
+        let needed = requiredLocks - currentLockedCount
         let candidates = lockCandidates(tiles: state.tiles, usedTileIds: state.usedTileIds)
         guard !candidates.isEmpty else { return }
 
@@ -197,6 +245,7 @@ enum Resolver {
 
         for index in tiles.indices {
             guard let tile = tiles[index] else { continue }
+            guard tile.kind == .normal else { continue }
             guard tile.freshness == .normal else { continue }
             guard !usedTileIds.contains(tile.id) else { continue }
             guard !hardLockLetters.contains(tile.letter) else { continue }
@@ -226,27 +275,36 @@ enum Resolver {
     }
 
     private static func countLockedTiles(in tiles: [Tile?]) -> Int {
-        tiles.compactMap { $0 }.filter { $0.freshness == .freshLocked }.count
+        tiles.compactMap { $0 }.filter { $0.isLetterTile && $0.freshness == .freshLocked }.count
     }
 
-    private static func generateFilledTiles(rows: Int, cols: Int, bag: inout LetterBag) -> [Tile?] {
-        var tiles = [Tile?](repeating: nil, count: rows * cols)
+    private static func generateFilledTiles(template: BoardTemplate, bag: inout LetterBag) -> [Tile?] {
+        let size = template.gridSize
+        var tiles = [Tile?](repeating: nil, count: size * size)
         var existingCounts: [Character: Int] = [:]
         for index in tiles.indices {
+            guard template.isPlayable(index) else {
+                tiles[index] = nil
+                continue
+            }
+
+            if template.isStone(index) {
+                tiles[index] = Tile.stone()
+                continue
+            }
+
             tiles[index] = bag.nextTile(respecting: LetterBag.rareCaps, existingCounts: &existingCounts)
         }
         return tiles
     }
 
-    private static func pathIsAdjacent(_ path: [Int], cols: Int) -> Bool {
+    private static func pathIsAdjacent(_ path: [Int], gridSize: Int, mode: AdjacencyMode) -> Bool {
         guard path.count >= 2 else { return true }
 
         for idx in 1..<path.count {
             let a = path[idx - 1]
             let b = path[idx]
-            let rowDelta = abs(a / cols - b / cols)
-            let colDelta = abs(a % cols - b % cols)
-            if rowDelta + colDelta != 1 {
+            if !neighbors(of: a, gridSize: gridSize, mode: mode).contains(b) {
                 return false
             }
         }
@@ -254,12 +312,12 @@ enum Resolver {
         return true
     }
 
-    private static func validatePath(_ path: [Int], rows: Int, cols: Int) -> SubmissionRejectionReason? {
+    private static func validatePath(_ path: [Int], template: BoardTemplate) -> SubmissionRejectionReason? {
         guard (minWordLen...maxWordLen).contains(path.count) else {
             return .invalidLength
         }
 
-        let boardSize = rows * cols
+        let boardSize = template.gridSize * template.gridSize
         guard path.allSatisfy({ (0..<boardSize).contains($0) }) else {
             return .outOfBounds
         }
@@ -268,7 +326,7 @@ enum Resolver {
             return .reusedTile
         }
 
-        guard pathIsAdjacent(path, cols: cols) else {
+        guard pathIsAdjacent(path, gridSize: template.gridSize, mode: template.adjacency) else {
             return .nonAdjacent
         }
 

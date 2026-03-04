@@ -1,0 +1,46 @@
+# Words to exclude from ALL dictionary lengths.
+# One word per line. Lines starting with # are comments.
+# Primarily abbreviations, initialisms, and ticker symbols.
+ekg
+emg
+gme
+amc
+etf
+eft
+ehr
+hdl
+ldl
+ecg
+dna
+rna
+mrna
+adr
+ipo
+llc
+inc
+ltd
+aaa
+bbb
+ccc
+ddd
+fff
+ggg
+hhh
+iii
+jjj
+kkk
+lll
+mmm
+nnn
+ooo
+ppp
+qqq
+rrr
+sss
+ttt
+uuu
+vvv
+www
+xxx
+yyy
+zzz

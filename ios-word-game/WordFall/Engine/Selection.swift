@@ -100,6 +100,7 @@ enum Selection {
             guard index >= 0, index < tiles.count, let tile = tiles[index] else {
                 return nil
             }
+            guard tile.isLetterTile else { return nil }
             letters.append(tile.letter)
         }
 

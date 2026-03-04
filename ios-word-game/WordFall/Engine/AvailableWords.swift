@@ -36,7 +36,7 @@ enum AvailableWords {
         for row in 0..<rows {
             for col in 0..<cols {
                 let index = row * cols + col
-                guard tiles[index] != nil else { continue }
+                guard let tile = tiles[index], tile.isLetterTile else { continue }
 
                 for (deltaRow, deltaCol) in [(0, 1), (1, 0)] {
                     let nextRow = row + deltaRow
@@ -44,7 +44,7 @@ enum AvailableWords {
                     guard nextRow < rows, nextCol < cols else { continue }
 
                     let neighborIndex = nextRow * cols + nextCol
-                    guard tiles[neighborIndex] != nil else { continue }
+                    guard let neighborTile = tiles[neighborIndex], neighborTile.isLetterTile else { continue }
 
                     var swapped = tiles
                     swapped.swapAt(index, neighborIndex)
@@ -85,7 +85,7 @@ enum AvailableWords {
         for row in 0..<rows {
             for col in 0..<cols {
                 let index = row * cols + col
-                guard tiles[index] != nil else { continue }
+                guard let tile = tiles[index], tile.isLetterTile else { continue }
 
                 for (deltaRow, deltaCol) in [(0, 1), (1, 0)] {
                     let nextRow = row + deltaRow
@@ -93,7 +93,7 @@ enum AvailableWords {
                     guard nextRow < rows, nextCol < cols else { continue }
 
                     let neighborIndex = nextRow * cols + nextCol
-                    guard tiles[neighborIndex] != nil else { continue }
+                    guard let neighborTile = tiles[neighborIndex], neighborTile.isLetterTile else { continue }
 
                     var swapped = tiles
                     swapped.swapAt(index, neighborIndex)

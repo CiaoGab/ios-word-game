@@ -1,14 +1,19 @@
 import SpriteKit
 
 final class BoardScene: SKScene {
-    var onSubmitPath: (([Int]) -> Void)?
     var onRequestBoard: (() -> [Tile?])?
+    var onRequestAdjacencyMode: (() -> AdjacencyMode)?
     /// Called at the start of every touch (touchesBegan), before input-lock checks.
     var onAnyTouch: (() -> Void)?
-    /// Called whenever the active drag path changes length (0 when cleared).
-    var onPathLengthChanged: ((Int) -> Void)?
+    /// Called whenever the tap selection changes. Passes the current path indices (empty when cleared).
+    var onSelectionChanged: (([Int]) -> Void)?
+    /// Called when wildcardPlacingMode is true and the player taps a valid tile.
+    /// The controller should convert that tile index to a wildcard and reset the flag.
+    var onWildcardPlace: ((Int) -> Void)?
 
     var inputLocked: Bool = false
+    /// When true, the next tile tap places a wildcard instead of extending the selection.
+    var wildcardPlacingMode: Bool = false
 
     private var layout: BoardLayout
     private var tileNodes: [UUID: TileNode] = [:]
@@ -24,6 +29,7 @@ final class BoardScene: SKScene {
 
     private var activePathIndices: [Int] = []
     private var currentHintPath: [Int]? = nil
+    private var settingsObserver: NSObjectProtocol?
 
     // MARK: - Hint animation constants
     // Tune these values to adjust the wave feel without touching logic.
@@ -39,7 +45,7 @@ final class BoardScene: SKScene {
         /// Delay before each successive ring fires its pulse in the wave.
         static let stagger: TimeInterval    = 0.18
         /// Rest pause after the last ring's pulse before the wave repeats.
-        static let pauseAfter: TimeInterval = 0.60
+        static let pauseAfter: TimeInterval = 0.56
     }
 
     init(rows: Int, cols: Int, size: CGSize) {
@@ -51,10 +57,23 @@ final class BoardScene: SKScene {
         configureBoardBackdrop()
         configureHintOverlayNode()
         configurePathOverlay()
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: SettingsStore.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.applyAccessibilitySettings()
+        }
     }
 
     required init?(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let settingsObserver {
+            NotificationCenter.default.removeObserver(settingsObserver)
+        }
     }
 
     override func didMove(to view: SKView) {
@@ -79,6 +98,16 @@ final class BoardScene: SKScene {
 
         // Recompute hint line positions after tiles have moved.
         applyHint(currentHintPath)
+    }
+
+    func configureGrid(rows: Int, cols: Int) {
+        guard rows > 0, cols > 0 else { return }
+        guard layout.rows != rows || layout.cols != cols else { return }
+        layout = BoardLayout(rows: rows, cols: cols)
+        clearActivePath()
+        clearHintOverlay()
+        currentHintPath = nil
+        updateLayout(for: size)
     }
 
     func renderBoard(tiles: [Tile?]) {
@@ -143,6 +172,7 @@ final class BoardScene: SKScene {
             }
 
         case .clear(let clear):
+            SoundManager.shared.playClear()
             var actions: [(SKNode, SKAction)] = []
 
             for boardIndex in clear.indices {
@@ -171,6 +201,7 @@ final class BoardScene: SKScene {
             }
 
         case .drop(let drops):
+            SoundManager.shared.playCascade()
             var actions: [(SKNode, SKAction)] = []
 
             for move in drops {
@@ -186,6 +217,7 @@ final class BoardScene: SKScene {
             }
 
         case .spawn(let spawns):
+            SoundManager.shared.playCascade()
             var actions: [(SKNode, SKAction)] = []
 
             for spawn in spawns {
@@ -233,78 +265,95 @@ final class BoardScene: SKScene {
         }
     }
 
-    // MARK: - Touch handling
+    // MARK: - Touch handling (tap-to-select)
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        applyHint(nil)   // clear hint visuals immediately on any touch
+        // Capture the hint path before it gets cleared, so autofill can use it.
+        let savedHint = currentHintPath
+        applyHint(nil)
         onAnyTouch?()
-        guard !inputLocked, let point = touches.first?.location(in: self) else {
-            clearActivePath()
-            return
-        }
-
-        startPathIfNeeded(at: point)
-    }
-
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard !inputLocked, let point = touches.first?.location(in: self) else {
-            return
-        }
-
-        extendPathIfNeeded(at: point)
-    }
-
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        defer { clearActivePath() }
-        guard !inputLocked else { return }
-        guard activePathIndices.count >= 3 else { return }
-        onSubmitPath?(activePathIndices)
+        guard !inputLocked, let point = touches.first?.location(in: self) else { return }
+        handleTap(at: point, savedHint: savedHint)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        clearActivePath()
+        // No-op: tap-based selection is not interrupted by cancellation.
     }
 
-    private func startPathIfNeeded(at point: CGPoint) {
-        guard
-            let index = layout.index(at: point),
-            tileIDForIndex[index] != nil
-        else {
-            clearActivePath()
+    // MARK: - Tap selection logic
+
+    private func handleTap(at point: CGPoint, savedHint: [Int]? = nil) {
+        guard let index = layout.index(at: point), isSelectableIndex(index) else {
+            // Tapped outside the board — ignore; use dedicated clear action instead.
             return
         }
 
-        activePathIndices = [index]
+        // Wildcard placing mode: intercept tap and delegate to controller.
+        if wildcardPlacingMode {
+            wildcardPlacingMode = false
+            onWildcardPlace?(index)
+            return
+        }
+
+        if activePathIndices.isEmpty {
+            // Hint autofill: if user taps the first tile of a hint path, fill the whole path.
+            if let hint = savedHint,
+               hint.count == 3,
+               hint[0] == index,
+               hint.allSatisfy({ isSelectableIndex($0) }) {
+                activePathIndices = hint
+            } else {
+                activePathIndices = [index]
+            }
+            Haptics.selectionStep()
+            SoundManager.shared.playSelection()
+        } else if activePathIndices.count >= 2,
+                  index == activePathIndices[activePathIndices.count - 2] {
+            // Tapping the immediate previous tile backtracks by one.
+            activePathIndices.removeLast()
+            Haptics.selectionStep()
+            SoundManager.shared.playSelection()
+        } else if activePathIndices.contains(index) {
+            // Tile already in path (including the last tile) — ignore.
+            return
+        } else if activePathIndices.count < 6,
+                  let lastIndex = activePathIndices.last,
+                  isAdjacent(lastIndex, index) {
+            // Template-adjacent and not yet in path — extend selection.
+            activePathIndices.append(index)
+            Haptics.selectionStep()
+            SoundManager.shared.playSelection()
+        }
+        // else: non-adjacent tile tap during active selection — ignore.
+
         updatePathUI()
     }
 
-    private func extendPathIfNeeded(at point: CGPoint) {
+    private func isSelectableIndex(_ index: Int) -> Bool {
+        guard let board = onRequestBoard?() else { return false }
+        guard index >= 0, index < board.count else { return false }
+        guard let tile = board[index] else { return false }
+        return tile.isLetterTile
+    }
+
+    private func isAdjacent(_ a: Int, _ b: Int) -> Bool {
+        let mode = onRequestAdjacencyMode?() ?? .hvOnly
+        return neighbors(of: a, gridSize: layout.cols, mode: mode).contains(b)
+    }
+
+    // MARK: - Public selection control
+
+    /// Clears the current tile selection (called by the controller after submit or reset).
+    func clearSelection() {
+        clearActivePath()
+    }
+
+    /// Removes the last tile from the selection (backtrack one step).
+    func popLastTile() {
         guard !activePathIndices.isEmpty else { return }
-        guard let index = layout.index(at: point), tileIDForIndex[index] != nil else {
-            return
-        }
-
-        guard let lastIndex = activePathIndices.last else { return }
-        if index == lastIndex { return }
-
-        // Backtrack: dragging onto the second-to-last tile pops the last tile.
-        if activePathIndices.count >= 2 && index == activePathIndices[activePathIndices.count - 2] {
-            activePathIndices.removeLast()
-            Haptics.selectionStep()
-            updatePathUI()
-            return
-        }
-
-        // Forbid reusing any other tile already in the path.
-        if activePathIndices.contains(index) {
-            return
-        }
-
-        guard activePathIndices.count < 6 else { return }
-        guard isAdjacent4(lastIndex, index) else { return }
-
-        activePathIndices.append(index)
+        activePathIndices.removeLast()
         Haptics.selectionStep()
+        SoundManager.shared.playSelection()
         updatePathUI()
     }
 
@@ -322,7 +371,7 @@ final class BoardScene: SKScene {
 
         guard activePathIndices.count >= 2 else {
             pathOverlay.path = nil
-            onPathLengthChanged?(activePathIndices.count)
+            onSelectionChanged?(activePathIndices)
             return
         }
 
@@ -336,13 +385,7 @@ final class BoardScene: SKScene {
             }
         }
         pathOverlay.path = path
-        onPathLengthChanged?(activePathIndices.count)
-    }
-
-    private func isAdjacent4(_ a: Int, _ b: Int) -> Bool {
-        let rowA = a / layout.cols, colA = a % layout.cols
-        let rowB = b / layout.cols, colB = b % layout.cols
-        return abs(rowA - rowB) + abs(colA - colB) == 1
+        onSelectionChanged?(activePathIndices)
     }
 
     // MARK: - Hint rendering
@@ -368,7 +411,7 @@ final class BoardScene: SKScene {
             ring.fillColor = .clear
             ring.strokeColor = ParchmentTheme.Palette.tileHint
             ring.lineWidth = 3
-            ring.alpha = HintAnim.alphaLow
+            ring.alpha = AppSettings.reduceMotion ? HintAnim.alphaHigh : HintAnim.alphaLow
             hintOverlayNode.addChild(ring)
             hintRings.append(ring)
         }
@@ -387,7 +430,9 @@ final class BoardScene: SKScene {
         hintOverlayNode.addChild(line)
         hintLineNode = line
 
-        startHintWave()
+        if !AppSettings.reduceMotion {
+            startHintWave()
+        }
     }
 
     /// Stops the wave and removes all hint overlay children without touching tile hint state.
@@ -404,7 +449,7 @@ final class BoardScene: SKScene {
     ///   t=0.00  ring0 fires  ─┐
     ///   t=0.18  ring1 fires   │ each pulse = halfPulse*2 = 0.28 s
     ///   t=0.36  ring2 fires  ─┘
-    ///   t=0.36 + 0.28 + 0.60 = t=1.24 → loop (≈ 1.2 s cycle)
+    ///   t=0.36 + 0.28 + 0.56 = t=1.20 → loop
     private func startHintWave() {
         guard hintRings.count == 3 else { return }
         let ring0 = hintRings[0]
@@ -451,17 +496,18 @@ final class BoardScene: SKScene {
 
         boardInset.zPosition = 2
         boardInset.fillColor = .clear
-        boardInset.strokeColor = ParchmentTheme.Palette.boardStrokeSK
+        boardInset.strokeColor = ParchmentTheme.Palette.boardInnerStrokeSK
         boardInset.lineWidth = ParchmentTheme.Stroke.boardContainer
         boardInset.lineJoin = .round
-        boardInset.glowWidth = 0.5
+        boardInset.glowWidth = 0
         addChild(boardInset)
+        applyAccessibilitySettings()
     }
 
     private func configurePathOverlay() {
         pathOverlay.zPosition = 6
         pathOverlay.strokeColor = SKColor(red: 0.16, green: 0.44, blue: 0.84, alpha: 0.52)
-        pathOverlay.lineWidth = 8
+        pathOverlay.lineWidth = AppSettings.highContrast ? 9 : 8
         pathOverlay.lineCap = .round
         pathOverlay.lineJoin = .round
         pathOverlay.glowWidth = 2
@@ -469,8 +515,23 @@ final class BoardScene: SKScene {
         addChild(pathOverlay)
     }
 
+    private func applyAccessibilitySettings() {
+        boardBackdrop.strokeColor = ParchmentTheme.Palette.boardDashSK
+        boardBackdrop.lineWidth = ParchmentTheme.Stroke.boardDashed
+        boardInset.strokeColor = ParchmentTheme.Palette.boardInnerStrokeSK
+        boardInset.lineWidth = ParchmentTheme.Stroke.boardContainer
+        pathOverlay.lineWidth = AppSettings.highContrast ? 9 : 8
+
+        for node in tileNodes.values {
+            node.refreshTheme()
+        }
+
+        // Re-apply the current hint so reduce-motion can stop/start the loop immediately.
+        applyHint(currentHintPath)
+    }
+
     private func updateBoardBackdropPath() {
-        let outerInset = layout.spacing * 0.5
+        let outerInset = layout.spacing * 0.35
         let outerRect = CGRect(
             x: -(layout.boardSize.width / 2) - outerInset,
             y: -(layout.boardSize.height / 2) - outerInset,
@@ -484,9 +545,9 @@ final class BoardScene: SKScene {
             cornerHeight: corner,
             transform: nil
         )
-        boardBackdrop.path = outerPath.copy(dashingWithPhase: 0, lengths: [8, 6])
+        boardBackdrop.path = outerPath.copy(dashingWithPhase: 0, lengths: [6, 6])
 
-        let innerRect = outerRect.insetBy(dx: 10, dy: 10)
+        let innerRect = outerRect.insetBy(dx: 7, dy: 7)
         boardInset.path = CGPath(
             roundedRect: innerRect,
             cornerWidth: max(12, corner - 4),

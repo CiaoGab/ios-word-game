@@ -5,7 +5,15 @@ final class SoundManager {
 
     private init() {}
 
-    func playSelection() {}
-    func playClear() {}
-    func playCascade() {}
+    func playSelection() {
+        guard AppSettings.soundEnabled else { return }
+    }
+
+    func playClear() {
+        guard AppSettings.soundEnabled else { return }
+    }
+
+    func playCascade() {
+        guard AppSettings.soundEnabled else { return }
+    }
 }
