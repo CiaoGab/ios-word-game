@@ -14,7 +14,7 @@ struct Milestone {
     let id: MilestoneID
     /// Human-readable description shown in RunSummaryView.
     let description: String
-    /// The perk that gets added to unlockedPerks when this milestone is reached.
+    /// The modifier that gets added to unlockedPerks when this milestone is reached.
     let unlocksPerkID: PerkID
     /// The numeric threshold that must be reached to unlock.
     let threshold: Int
@@ -38,7 +38,7 @@ extension MilestoneID {
         case .useLetterAIn100Words:
             return Milestone(id: .useLetterAIn100Words,
                 description: "Use letter A in 100 words",
-                unlocksPerkID: .vowelBloomPlus,
+                unlocksPerkID: .echoChamber,
                 threshold: 100)
         }
     }

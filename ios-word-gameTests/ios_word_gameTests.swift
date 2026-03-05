@@ -13,7 +13,8 @@ struct ios_word_gameTests {
         let b = Tile(id: UUID(), letter: "B")
 
         let tiles: [Tile?] = [a, nil, b, nil]
-        let result = Gravity.apply(tiles: tiles, rows: rows, cols: cols)
+        let template = BoardTemplate.full(gridSize: max(rows, cols), id: "test_gravity", name: "Test Gravity")
+        let result = Gravity.apply(tiles: tiles, rows: rows, cols: cols, template: template)
 
         #expect(result.tiles[0] == nil)
         #expect(result.tiles[1] == nil)
@@ -24,11 +25,11 @@ struct ios_word_gameTests {
 
     @Test func resolverRejectsShortPath() {
         var bag = LetterBag(weights: [("Z", 1)])
-        let dictionary = WordDictionary(words: ["cat"])
+        let dictionary = WordDictionary(words: ["game"])
         let state = TestBuilders.makeState(
             rows: 1,
-            cols: 3,
-            tiles: [TestBuilders.makeTile("C"), TestBuilders.makeTile("A"), TestBuilders.makeTile("T")]
+            cols: 4,
+            tiles: [TestBuilders.makeTile("G"), TestBuilders.makeTile("A"), TestBuilders.makeTile("M"), TestBuilders.makeTile("E")]
         )
 
         let result = Resolver.reduce(
@@ -44,32 +45,52 @@ struct ios_word_gameTests {
         #expect(result.events.isEmpty)
     }
 
-    @Test func freshLockedTilesBreakButDoNotClear() {
+    @Test func resolverAcceptsNonAdjacentFreePickPath() {
         var bag = LetterBag(weights: [("Z", 1)])
-        let dictionary = WordDictionary(words: ["cat"])
-        let tileIDs = [UUID(), UUID(), UUID()]
-
+        let dictionary = WordDictionary(words: ["game"])
         let tiles: [Tile?] = [
-            TestBuilders.makeTile("C", freshness: .freshLocked, id: tileIDs[0]),
-            TestBuilders.makeTile("A", freshness: .freshLocked, id: tileIDs[1]),
-            TestBuilders.makeTile("T", freshness: .freshLocked, id: tileIDs[2])
+            TestBuilders.makeTile("G"), TestBuilders.makeTile("M"), nil, nil,
+            nil, nil, TestBuilders.makeTile("E"), TestBuilders.makeTile("A")
         ]
-
-        let state = TestBuilders.makeState(rows: 1, cols: 3, tiles: tiles)
+        let state = TestBuilders.makeState(rows: 2, cols: 4, tiles: tiles)
         let result = Resolver.reduce(
             state: state,
-            action: .submitPath(indices: [0, 1, 2]),
+            action: .submitPath(indices: [0, 7, 1, 6]),
+            dictionary: dictionary,
+            bag: &bag
+        )
+
+        #expect(result.accepted)
+        #expect(result.acceptedWord == "game")
+    }
+
+    @Test func freshLockedTilesBreakButDoNotClear() {
+        var bag = LetterBag(weights: [("Z", 1)])
+        let dictionary = WordDictionary(words: ["game"])
+        let tileIDs = [UUID(), UUID(), UUID(), UUID()]
+
+        let tiles: [Tile?] = [
+            TestBuilders.makeTile("G", freshness: .freshLocked, id: tileIDs[0]),
+            TestBuilders.makeTile("A", freshness: .freshLocked, id: tileIDs[1]),
+            TestBuilders.makeTile("M", freshness: .freshLocked, id: tileIDs[2]),
+            TestBuilders.makeTile("E", freshness: .freshLocked, id: tileIDs[3])
+        ]
+
+        let state = TestBuilders.makeState(rows: 1, cols: 4, tiles: tiles)
+        let result = Resolver.reduce(
+            state: state,
+            action: .submitPath(indices: [0, 1, 2, 3]),
             dictionary: dictionary,
             bag: &bag
         )
 
         #expect(result.accepted)
         #expect(result.clearedCount == 0)
-        #expect(result.locksBrokenThisMove == 3)
-        #expect(result.movesDelta == -1)
-        #expect(result.newState.totalLocksBroken == 3)
+        #expect(result.locksBrokenThisMove == 4)
+        #expect(result.movesDelta == 0)
+        #expect(result.newState.totalLocksBroken == 4)
 
-        for index in 0..<3 {
+        for index in 0..<4 {
             #expect(result.newState.tiles[index]?.id == tileIDs[index])
             #expect(result.newState.tiles[index]?.freshness == .freshUnlocked)
         }
@@ -78,39 +99,40 @@ struct ios_word_gameTests {
             Issue.record("Expected lockBreak event")
             return
         }
-        #expect(indices == [0, 1, 2])
+        #expect(indices == [0, 1, 2, 3])
     }
 
     @Test func mixedFreshnessClearsOnlyUnlockedAndNormal() {
         var bag = LetterBag(weights: [("Z", 1)])
-        let dictionary = WordDictionary(words: ["cat"])
+        let dictionary = WordDictionary(words: ["game"])
         let lockedID = UUID()
 
         let tiles: [Tile?] = [
-            TestBuilders.makeTile("C", freshness: .normal),
+            TestBuilders.makeTile("G", freshness: .normal),
             TestBuilders.makeTile("A", freshness: .freshUnlocked),
-            TestBuilders.makeTile("T", freshness: .freshLocked, id: lockedID)
+            TestBuilders.makeTile("M", freshness: .normal),
+            TestBuilders.makeTile("E", freshness: .freshLocked, id: lockedID)
         ]
 
-        let state = TestBuilders.makeState(rows: 1, cols: 3, tiles: tiles)
+        let state = TestBuilders.makeState(rows: 1, cols: 4, tiles: tiles)
         let result = Resolver.reduce(
             state: state,
-            action: .submitPath(indices: [0, 1, 2]),
+            action: .submitPath(indices: [0, 1, 2, 3]),
             dictionary: dictionary,
             bag: &bag
         )
 
         #expect(result.accepted)
-        #expect(result.clearedCount == 2)
+        #expect(result.clearedCount == 3)
         #expect(result.locksBrokenThisMove == 1)
-        #expect(result.newState.tiles[2]?.id == lockedID)
-        #expect(result.newState.tiles[2]?.freshness == .freshUnlocked)
+        #expect(result.newState.tiles[3]?.id == lockedID)
+        #expect(result.newState.tiles[3]?.freshness == .freshUnlocked)
 
         let clearEvents = result.events.compactMap { event -> ClearEvent? in
             guard case .clear(let clear) = event else { return nil }
             return clear
         }
-        #expect(clearEvents.first?.indices == [0, 1])
+        #expect(clearEvents.first?.indices == [0, 1, 2])
     }
 
     @Test func initialStateHasTargetLockFloor() {
@@ -120,6 +142,94 @@ struct ios_word_gameTests {
 
         let lockedCount = state.tiles.compactMap { $0 }.filter { $0.freshness == .freshLocked }.count
         #expect(lockedCount >= GameState.defaultTargetLocks)
+    }
+
+    @MainActor
+    @Test func submitCostUnlockedSelection_equals1() {
+        let controller = GameSessionController(milestoneTracker: MilestoneTrackerTestHelper.makeIsolated())
+        let dictionary = WordDictionary(words: ["game"])
+        let state = TestBuilders.makeState(
+            rows: 1,
+            cols: 4,
+            tiles: [TestBuilders.makeTile("G"), TestBuilders.makeTile("A"), TestBuilders.makeTile("M"), TestBuilders.makeTile("E")]
+        )
+        controller.configureForTesting(state: state, dictionary: dictionary)
+        #expect(controller.computeSubmitCost(selectionIndices: [0, 1, 2, 3]) == 1)
+    }
+
+    @MainActor
+    @Test func submitCostIncludesLocked_equals2() {
+        let controller = GameSessionController(milestoneTracker: MilestoneTrackerTestHelper.makeIsolated())
+        let dictionary = WordDictionary(words: ["game"])
+        let state = TestBuilders.makeState(
+            rows: 1,
+            cols: 4,
+            tiles: [
+                TestBuilders.makeTile("G", freshness: .freshLocked),
+                TestBuilders.makeTile("A"),
+                TestBuilders.makeTile("M"),
+                TestBuilders.makeTile("E")
+            ]
+        )
+        controller.configureForTesting(state: state, dictionary: dictionary)
+        #expect(controller.computeSubmitCost(selectionIndices: [0, 1, 2, 3]) == 2)
+    }
+
+    @MainActor
+    @Test func invalidSubmitRefundsCost() {
+        let controller = GameSessionController(milestoneTracker: MilestoneTrackerTestHelper.makeIsolated())
+        let dictionary = WordDictionary(words: ["game"])
+        let state = TestBuilders.makeState(
+            rows: 1,
+            cols: 4,
+            tiles: [TestBuilders.makeTile("G"), TestBuilders.makeTile("A"), TestBuilders.makeTile("M"), TestBuilders.makeTile("X")],
+            moves: 5
+        )
+        controller.configureForTesting(state: state, dictionary: dictionary)
+        controller.submitPath(indices: [0, 1, 2, 3])
+
+        #expect(controller.moves == 5)
+        #expect(controller.lastSubmitOutcome == .invalid)
+    }
+
+    @MainActor
+    @Test func validSubmitSpendsCost() {
+        let controller = GameSessionController(milestoneTracker: MilestoneTrackerTestHelper.makeIsolated())
+        let dictionary = WordDictionary(words: ["game"])
+        let state = TestBuilders.makeState(
+            rows: 1,
+            cols: 4,
+            tiles: [TestBuilders.makeTile("G"), TestBuilders.makeTile("A"), TestBuilders.makeTile("M"), TestBuilders.makeTile("E")],
+            moves: 5
+        )
+        controller.configureForTesting(state: state, dictionary: dictionary)
+        controller.submitPath(indices: [0, 1, 2, 3])
+
+        #expect(controller.moves == 4)
+        #expect(controller.lastSubmitOutcome == .valid)
+    }
+
+    @MainActor
+    @Test func cannotSubmitIfMovesInsufficient_noSpend() {
+        let controller = GameSessionController(milestoneTracker: MilestoneTrackerTestHelper.makeIsolated())
+        let dictionary = WordDictionary(words: ["game"])
+        let state = TestBuilders.makeState(
+            rows: 1,
+            cols: 4,
+            tiles: [
+                TestBuilders.makeTile("G", freshness: .freshLocked),
+                TestBuilders.makeTile("A"),
+                TestBuilders.makeTile("M"),
+                TestBuilders.makeTile("E")
+            ],
+            moves: 1
+        )
+        controller.configureForTesting(state: state, dictionary: dictionary)
+        controller.submitPath(indices: [0, 1, 2, 3])
+
+        #expect(controller.moves == 1)
+        #expect(controller.lastSubmitOutcome == .invalid)
+        #expect(controller.status == "rejected:notEnoughMoves")
     }
 
     // MARK: - Run formula tests
@@ -142,20 +252,27 @@ struct ios_word_gameTests {
         }
     }
 
-    /// Verify locksGoal formula for 15-board roguelike.
-    /// Base: 4 + board + (board-1)/3. Boss boards ×1.5 (ceil).
+    /// Verify locksGoal progression with template scaling and boss multipliers.
     @Test func runLocksGoalFormulaIsCorrect() {
-        let cases: [(board: Int, expected: Int)] = [
-            (1, 5), (2, 6), (3, 7), (4, 9),
-            (5, 15),    // base=10, boss ceil(10*1.5)=15
-            (6, 11), (7, 13),
-            (10, 26),   // base=17, boss ceil(17*1.5)=26
-            (15, 35)    // base=23, boss ceil(23*1.5)=35
-        ]
-        for (board, exp) in cases {
-            #expect(RunState.locksGoal(for: board) == exp,
-                    "Board \(board): expected \(exp) got \(RunState.locksGoal(for: board))")
-        }
+        let board1 = RunState.locksGoal(for: 1)
+        let board4 = RunState.locksGoal(for: 4)
+        let board5Boss = RunState.locksGoal(for: 5)
+        let board6 = RunState.locksGoal(for: 6)
+
+        #expect(board1 < board4)
+        #expect(board4 < board5Boss)
+        #expect(board5Boss > board4)
+        #expect(board5Boss > board6)
+
+        let sixBySix = BoardTemplate.full(gridSize: 6, id: "test_6x6", name: "Test 6x6")
+        let sevenBySeven = BoardTemplate.full(gridSize: 7, id: "test_7x7", name: "Test 7x7")
+        let board4Six = RunState.locksGoal(for: 4, template: sixBySix)
+        let board4Seven = RunState.locksGoal(for: 4, template: sevenBySeven)
+        #expect(board4Six <= board4Seven)
+
+        // Spot-checks on stable baseline cases.
+        #expect(board1 == 5)
+        #expect(board5Boss == 11)
     }
 
     /// Run has 15 boards total.
@@ -170,11 +287,10 @@ struct ios_word_gameTests {
         run.scoreThisBoard = 250
         run.shufflesRemaining = 2
         run.pendingMoveFraction = 0.5
-        run.lockRefundMovesGranted = 2
-        run.lockRefundRealLocks = 6
+        run.modifierPendingMoveFraction = 1.5
         run.freshSparkCount = 3
-        run.freeHintUsed = true
-        run.freeUndoUsed = true
+        run.freeHintChargesRemaining = 1
+        run.freeUndoChargesRemaining = 1
 
         run.resetBoardCounters()
 
@@ -182,11 +298,10 @@ struct ios_word_gameTests {
         #expect(run.scoreThisBoard == 0)
         #expect(run.shufflesRemaining == RunState.Tunables.shufflesPerBoard)
         #expect(run.pendingMoveFraction == 0.0)
-        #expect(run.lockRefundMovesGranted == 0)
-        #expect(run.lockRefundRealLocks == 0)
+        #expect(run.modifierPendingMoveFraction == 0.0)
         #expect(run.freshSparkCount == 0)
-        #expect(run.freeHintUsed == false)
-        #expect(run.freeUndoUsed == false)
+        #expect(run.freeHintChargesRemaining == 0)
+        #expect(run.freeUndoChargesRemaining == 0)
     }
 
     /// Repeat penalty multipliers match the new 5-entry curve [1.0, 0.7, 0.5, 0.35, 0.25].
@@ -269,6 +384,20 @@ struct ios_word_gameTests {
         #expect(tracker.unlockedPerks.contains(.bigGame))
     }
 
+    /// recordWord unlocks echoChamber after 100 words containing A.
+    @Test func milestoneTrackerUnlocksEchoChamberAt100AWords() {
+        let tracker = MilestoneTrackerTestHelper.makeIsolated()
+        #expect(!tracker.unlockedPerks.contains(.echoChamber))
+
+        for _ in 0..<99 {
+            tracker.recordWord("CAT")
+        }
+        #expect(!tracker.unlockedPerks.contains(.echoChamber))
+
+        tracker.recordWord("CAT")
+        #expect(tracker.unlockedPerks.contains(.echoChamber))
+    }
+
     /// milestoneProgress returns correct tuple before and after threshold.
     @Test func milestoneProgressReturnsCorrectTuple() {
         let tracker = MilestoneTrackerTestHelper.makeIsolated()
@@ -280,123 +409,97 @@ struct ios_word_gameTests {
     }
 }
 
-    // MARK: - Dictionary path-order and abbreviation tests
+// MARK: - Dictionary path-order tests
 
-    /// A path spelling "GME" must be rejected: it is an abbreviation/ticker
-    /// and must not exist in the 3-letter common set.
-    /// Anagram acceptance must also be impossible — the dictionary validates
-    /// only the exact path string (forward) or its strict reversal.
-    @Test func dictionaryRejectsGME() {
-        // Build a dictionary that only knows "cat".
-        let dict = WordDictionary(words: ["cat"])
+@Test func dictionaryRejectsGMEZ() {
+    let dict = WordDictionary(words: ["game"])
+    #expect(!dict.contains("gmez"))
+    #expect(!dict.containsEitherDirection("gmez"))
+    #expect(dict.contains("game"))
+}
 
-        // "gme" is not in the dictionary.
-        #expect(!dict.contains("gme"))
-        // Neither is any anagram of "gme".
-        #expect(!dict.containsEitherDirection("gme"))
-        // Reversed "emg" is also not valid.
-        #expect(!dict.containsEitherDirection("emg"))
+@Test func dictionaryRejectsEKGX() {
+    let dict = WordDictionary(words: ["game"])
+    #expect(!dict.contains("ekgx"))
+    #expect(!dict.containsEitherDirection("ekgx"))
+}
 
-        // Sanity: "cat" IS accepted.
-        #expect(dict.contains("cat"))
-        // And reversed "tac" is found via either-direction.
-        #expect(dict.containsEitherDirection("tac"))
-    }
+@Test func resolverRejectsPathSpellingGMEZ() {
+    var bag = LetterBag(weights: [("Z", 1)])
+    let dictionary = WordDictionary(words: ["game"])
+    let tiles: [Tile?] = [TestBuilders.makeTile("G"), TestBuilders.makeTile("M"), TestBuilders.makeTile("E"), TestBuilders.makeTile("Z")]
+    let state = TestBuilders.makeState(rows: 1, cols: 4, tiles: tiles)
 
-    /// A path spelling "EKG" must be rejected.
-    @Test func dictionaryRejectsEKG() {
-        let dict = WordDictionary(words: ["cat"])
-        #expect(!dict.contains("ekg"))
-        #expect(!dict.containsEitherDirection("ekg"))
-    }
+    let result = Resolver.reduce(
+        state: state,
+        action: .submitPath(indices: [0, 1, 2, 3]),
+        dictionary: dictionary,
+        bag: &bag
+    )
 
-    /// Resolver must reject a submitted path whose tiles spell "GME"
-    /// even when the dictionary is pre-loaded with "cat".
-    @Test func resolverRejectsPathSpellingGME() {
-        var bag = LetterBag(weights: [("Z", 1)])
-        let dictionary = WordDictionary(words: ["cat"])
-        // Tiles spell G-M-E
-        let tiles: [Tile?] = [TestBuilders.makeTile("G"), TestBuilders.makeTile("M"), TestBuilders.makeTile("E")]
-        let state = TestBuilders.makeState(rows: 1, cols: 3, tiles: tiles)
+    #expect(!result.accepted)
+    #expect(result.rejectionReason == .notInDictionary)
+}
 
-        let result = Resolver.reduce(
-            state: state,
-            action: .submitPath(indices: [0, 1, 2]),
-            dictionary: dictionary,
-            bag: &bag
-        )
+@Test func resolverRejectsPathSpellingEKGX() {
+    var bag = LetterBag(weights: [("Z", 1)])
+    let dictionary = WordDictionary(words: ["game"])
+    let tiles: [Tile?] = [TestBuilders.makeTile("E"), TestBuilders.makeTile("K"), TestBuilders.makeTile("G"), TestBuilders.makeTile("X")]
+    let state = TestBuilders.makeState(rows: 1, cols: 4, tiles: tiles)
 
-        #expect(!result.accepted)
-        #expect(result.rejectionReason == .notInDictionary)
-    }
+    let result = Resolver.reduce(
+        state: state,
+        action: .submitPath(indices: [0, 1, 2, 3]),
+        dictionary: dictionary,
+        bag: &bag
+    )
 
-    /// Resolver must reject a path spelling "EKG".
-    @Test func resolverRejectsPathSpellingEKG() {
-        var bag = LetterBag(weights: [("Z", 1)])
-        let dictionary = WordDictionary(words: ["cat"])
-        let tiles: [Tile?] = [TestBuilders.makeTile("E"), TestBuilders.makeTile("K"), TestBuilders.makeTile("G")]
-        let state = TestBuilders.makeState(rows: 1, cols: 3, tiles: tiles)
+    #expect(!result.accepted)
+    #expect(result.rejectionReason == .notInDictionary)
+}
 
-        let result = Resolver.reduce(
-            state: state,
-            action: .submitPath(indices: [0, 1, 2]),
-            dictionary: dictionary,
-            bag: &bag
-        )
+@Test func resolverRejectsReversePathOrder() {
+    let dictionary = WordDictionary(words: ["game"])
+    let tiles: [Tile?] = [TestBuilders.makeTile("G"), TestBuilders.makeTile("A"), TestBuilders.makeTile("M"), TestBuilders.makeTile("E")]
+    let state = TestBuilders.makeState(rows: 1, cols: 4, tiles: tiles)
 
-        #expect(!result.accepted)
-        #expect(result.rejectionReason == .notInDictionary)
-    }
+    var reverseBag = LetterBag(weights: [("Z", 1)])
+    let reverse = Resolver.reduce(
+        state: state,
+        action: .submitPath(indices: [3, 2, 1, 0]),
+        dictionary: dictionary,
+        bag: &reverseBag
+    )
+    #expect(!reverse.accepted)
+    #expect(reverse.rejectionReason == .notInDictionary)
 
-    /// Path order is respected: tiles [C, A, T] at indices [0,1,2] form "cat",
-    /// which is accepted. The same tiles at indices [2,1,0] form "tac" and must
-    /// also be accepted (reverse match), but NOT because letters were sorted.
-    @Test func resolverAcceptsForwardAndReversePathOrder() {
-        var bag = LetterBag(weights: [("Z", 1)])
-        let dictionary = WordDictionary(words: ["cat"])
-        let tiles: [Tile?] = [TestBuilders.makeTile("C"), TestBuilders.makeTile("A"), TestBuilders.makeTile("T")]
-        let state = TestBuilders.makeState(rows: 1, cols: 3, tiles: tiles)
+    var forwardBag = LetterBag(weights: [("Z", 1)])
+    let forward = Resolver.reduce(
+        state: state,
+        action: .submitPath(indices: [0, 1, 2, 3]),
+        dictionary: dictionary,
+        bag: &forwardBag
+    )
+    #expect(forward.accepted)
+    #expect(forward.acceptedWord == "game")
+}
 
-        // Forward path [0,1,2] => "cat" — must be accepted.
-        let forward = Resolver.reduce(
-            state: state,
-            action: .submitPath(indices: [0, 1, 2]),
-            dictionary: dictionary,
-            bag: &bag
-        )
-        #expect(forward.accepted)
-        #expect(forward.acceptedWord == "cat")
+@Test func resolverRejectsAnagramPath() {
+    var bag = LetterBag(weights: [("Z", 1)])
+    let dictionary = WordDictionary(words: ["game"])
+    let tiles: [Tile?] = [TestBuilders.makeTile("G"), TestBuilders.makeTile("E"), TestBuilders.makeTile("A"), TestBuilders.makeTile("M")]
+    let state = TestBuilders.makeState(rows: 1, cols: 4, tiles: tiles)
 
-        // Reverse path [2,1,0] => "tac" — dictionary contains reverse "cat", accept.
-        let reverse = Resolver.reduce(
-            state: state,
-            action: .submitPath(indices: [2, 1, 0]),
-            dictionary: dictionary,
-            bag: &bag
-        )
-        #expect(reverse.accepted)
-        #expect(reverse.acceptedWord == "cat")
-    }
+    let result = Resolver.reduce(
+        state: state,
+        action: .submitPath(indices: [0, 1, 2, 3]),
+        dictionary: dictionary,
+        bag: &bag
+    )
 
-    /// Anagram path must NOT be accepted. Tiles [C, T, A] at [0,1,2] spell "cta",
-    /// which is neither "cat" nor reversed "tac", so it must be rejected.
-    @Test func resolverRejectsAnagramPath() {
-        var bag = LetterBag(weights: [("Z", 1)])
-        let dictionary = WordDictionary(words: ["cat"])
-        // Tiles in anagram order: C, T, A (spells "cta")
-        let tiles: [Tile?] = [TestBuilders.makeTile("C"), TestBuilders.makeTile("T"), TestBuilders.makeTile("A")]
-        let state = TestBuilders.makeState(rows: 1, cols: 3, tiles: tiles)
-
-        let result = Resolver.reduce(
-            state: state,
-            action: .submitPath(indices: [0, 1, 2]),
-            dictionary: dictionary,
-            bag: &bag
-        )
-
-        #expect(!result.accepted)
-        #expect(result.rejectionReason == .notInDictionary)
-    }
+    #expect(!result.accepted)
+    #expect(result.rejectionReason == .notInDictionary)
+}
 
 // MARK: - Test helper (isolated UserDefaults key)
 

@@ -36,7 +36,8 @@ struct RunState {
     /// Current board number, 1-indexed (1…15).
     var boardIndex: Int = 1
 
-    /// Perks the player has selected, accumulated across previous boards.
+    /// Modifiers selected so far in this run.
+    /// Duplicates are blocked by default and only allowed after Echo Chamber.
     var activePerks: [PerkID] = []
 
     /// Powerup inventory (hints, wildcards, undos). Shuffles are tracked separately.
@@ -54,36 +55,54 @@ struct RunState {
     /// Score earned on this board toward this board's score goal.
     var scoreThisBoard: Int = 0
 
-    /// Shuffles remaining for this board (starts at Tunables.shufflesPerBoard).
+    /// Shuffles remaining for this board.
     var shufflesRemaining: Int = Tunables.shufflesPerBoard
 
     /// Fractional move buffer for built-in refunds (e.g. 0.5 accumulates across 5-letter words).
     var pendingMoveFraction: Double = 0.0
 
-    // MARK: - Per-board perk counters (reset by resetBoardCounters each board)
-
-    /// Moves granted so far by the lockRefund perk this board. Cap: 2.
-    var lockRefundMovesGranted: Int = 0
-
-    /// Real (unmodified) locks broken this board, used for the lockRefund threshold.
-    var lockRefundRealLocks: Int = 0
+    // MARK: - Per-board modifier state (reset each board)
 
     /// Number of times freshSpark has triggered this board. Cap: 3.
     var freshSparkCount: Int = 0
 
-    /// Whether the freeHint allowance was consumed this board.
-    var freeHintUsed: Bool = false
+    /// Free hint charges granted by modifiers for this board.
+    var freeHintChargesRemaining: Int = 0
 
-    /// Whether the freeUndo allowance was consumed this board.
-    var freeUndoUsed: Bool = false
+    /// Free undo charges granted by modifiers for this board.
+    var freeUndoChargesRemaining: Int = 0
+
+    /// Fractional move buffer from modifier-specific move refunds.
+    var modifierPendingMoveFraction: Double = 0.0
+
+    /// Dynamic objectives after applying onBoardStart/onBossBoard modifiers.
+    var lockTargetThisBoard: Int = 0
+    var scoreTargetThisBoard: Int = 0
+
+    /// Dynamic refund multipliers set on board start.
+    var lengthRefundMultiplierThisBoard: Double = 1.0
+    var lockBreakRefundMultiplierThisBoard: Double = 1.0
+
+    /// Dynamic reward adjustments set on board start.
+    var guaranteedBonusRewardsThisBoard: Int = 0
+    var extraRewardRollChanceThisBoard: Double = 0.0
+    var rewardHintWeightDeltaThisBoard: Int = 0
+    var rewardWildcardWeightDeltaThisBoard: Int = 0
+    var rewardUndoWeightDeltaThisBoard: Int = 0
 
     // MARK: - Derived
 
     var isBossBoard: Bool { boardIndex % 5 == 0 }
     var boardTemplate: BoardTemplate { BoardTemplate.template(for: boardIndex) }
     var movesForBoard: Int { RunState.moves(for: boardIndex) }
-    var locksGoalForBoard: Int { RunState.locksGoal(for: boardIndex, template: boardTemplate) }
-    var scoreGoalForBoard: Int { RunState.scoreGoal(for: boardIndex, template: boardTemplate) }
+    var locksGoalForBoard: Int {
+        if lockTargetThisBoard > 0 { return lockTargetThisBoard }
+        return RunState.locksGoal(for: boardIndex, template: boardTemplate)
+    }
+    var scoreGoalForBoard: Int {
+        if scoreTargetThisBoard > 0 { return scoreTargetThisBoard }
+        return RunState.scoreGoal(for: boardIndex, template: boardTemplate)
+    }
 
     // MARK: - Board scaling formulas
 
@@ -133,10 +152,18 @@ struct RunState {
         scoreThisBoard = 0
         shufflesRemaining = Tunables.shufflesPerBoard
         pendingMoveFraction = 0.0
-        lockRefundMovesGranted = 0
-        lockRefundRealLocks = 0
         freshSparkCount = 0
-        freeHintUsed = false
-        freeUndoUsed = false
+        freeHintChargesRemaining = 0
+        freeUndoChargesRemaining = 0
+        modifierPendingMoveFraction = 0.0
+        lockTargetThisBoard = 0
+        scoreTargetThisBoard = 0
+        lengthRefundMultiplierThisBoard = 1.0
+        lockBreakRefundMultiplierThisBoard = 1.0
+        guaranteedBonusRewardsThisBoard = 0
+        extraRewardRollChanceThisBoard = 0.0
+        rewardHintWeightDeltaThisBoard = 0
+        rewardWildcardWeightDeltaThisBoard = 0
+        rewardUndoWeightDeltaThisBoard = 0
     }
 }

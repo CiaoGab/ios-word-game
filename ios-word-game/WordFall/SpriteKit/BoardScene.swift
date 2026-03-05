@@ -2,9 +2,6 @@ import SpriteKit
 
 final class BoardScene: SKScene {
     var onRequestBoard: (() -> [Tile?])?
-    var onRequestAdjacencyMode: (() -> AdjacencyMode)?
-    /// Called at the start of every touch (touchesBegan), before input-lock checks.
-    var onAnyTouch: (() -> Void)?
     /// Called whenever the tap selection changes. Passes the current path indices (empty when cleared).
     var onSelectionChanged: (([Int]) -> Void)?
     /// Called when wildcardPlacingMode is true and the player taps a valid tile.
@@ -26,6 +23,7 @@ final class BoardScene: SKScene {
     private var hintRings: [SKShapeNode] = []
     private var hintLineNode: SKShapeNode? = nil
     private let hintWaveKey = "hintWave"
+    private let maxSelectionLength = 8
 
     private var activePathIndices: [Int] = []
     private var currentHintPath: [Int]? = nil
@@ -268,12 +266,8 @@ final class BoardScene: SKScene {
     // MARK: - Touch handling (tap-to-select)
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // Capture the hint path before it gets cleared, so autofill can use it.
-        let savedHint = currentHintPath
-        applyHint(nil)
-        onAnyTouch?()
         guard !inputLocked, let point = touches.first?.location(in: self) else { return }
-        handleTap(at: point, savedHint: savedHint)
+        handleTap(at: point)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -282,7 +276,7 @@ final class BoardScene: SKScene {
 
     // MARK: - Tap selection logic
 
-    private func handleTap(at point: CGPoint, savedHint: [Int]? = nil) {
+    private func handleTap(at point: CGPoint) {
         guard let index = layout.index(at: point), isSelectableIndex(index) else {
             // Tapped outside the board — ignore; use dedicated clear action instead.
             return
@@ -295,36 +289,17 @@ final class BoardScene: SKScene {
             return
         }
 
-        if activePathIndices.isEmpty {
-            // Hint autofill: if user taps the first tile of a hint path, fill the whole path.
-            if let hint = savedHint,
-               hint.count == 3,
-               hint[0] == index,
-               hint.allSatisfy({ isSelectableIndex($0) }) {
-                activePathIndices = hint
-            } else {
-                activePathIndices = [index]
-            }
+        if let selectedOffset = activePathIndices.firstIndex(of: index) {
+            activePathIndices.remove(at: selectedOffset)
             Haptics.selectionStep()
             SoundManager.shared.playSelection()
-        } else if activePathIndices.count >= 2,
-                  index == activePathIndices[activePathIndices.count - 2] {
-            // Tapping the immediate previous tile backtracks by one.
-            activePathIndices.removeLast()
-            Haptics.selectionStep()
-            SoundManager.shared.playSelection()
-        } else if activePathIndices.contains(index) {
-            // Tile already in path (including the last tile) — ignore.
-            return
-        } else if activePathIndices.count < 6,
-                  let lastIndex = activePathIndices.last,
-                  isAdjacent(lastIndex, index) {
-            // Template-adjacent and not yet in path — extend selection.
+        } else if activePathIndices.count < maxSelectionLength {
             activePathIndices.append(index)
             Haptics.selectionStep()
             SoundManager.shared.playSelection()
+        } else {
+            Haptics.notifyWarning()
         }
-        // else: non-adjacent tile tap during active selection — ignore.
 
         updatePathUI()
     }
@@ -336,16 +311,24 @@ final class BoardScene: SKScene {
         return tile.isLetterTile
     }
 
-    private func isAdjacent(_ a: Int, _ b: Int) -> Bool {
-        let mode = onRequestAdjacencyMode?() ?? .hvOnly
-        return neighbors(of: a, gridSize: layout.cols, mode: mode).contains(b)
-    }
-
     // MARK: - Public selection control
 
     /// Clears the current tile selection (called by the controller after submit or reset).
     func clearSelection() {
         clearActivePath()
+    }
+
+    /// Sets the current selection programmatically (used for hint powerups).
+    func setSelection(indices: [Int]) {
+        var seen: Set<Int> = []
+        var unique: [Int] = []
+        for index in indices where !seen.contains(index) {
+            seen.insert(index)
+            unique.append(index)
+        }
+        let clamped = Array(unique.prefix(maxSelectionLength))
+        activePathIndices = clamped.filter { isSelectableIndex($0) }
+        updatePathUI()
     }
 
     /// Removes the last tile from the selection (backtrack one step).

@@ -53,8 +53,22 @@ final class GameSessionController: ObservableObject {
     @Published var showRunSummary: Bool = false
     @Published var runSummaryBoard: Int = 0
     @Published var runSummaryWon: Bool = false
+    @Published private(set) var runTotalScore: Int = 0
+    @Published private(set) var runBoardsCleared: Int = 0
+    @Published private(set) var runLocksBrokenTotal: Int = 0
+    @Published private(set) var runWordsBuiltTotal: Int = 0
+    @Published private(set) var runBestWord: String = ""
+    @Published private(set) var runBestWordScore: Int = 0
+    @Published private(set) var runSummarySnapshot: RunSummarySnapshot? = nil
     /// True while the round clear stamp is visible before the perk draft appears.
     @Published var showRoundClearStamp: Bool = false
+    /// Pulsed true when a board is initialized so the UI can show intro banner.
+    @Published var showBanner: Bool = false
+    @Published private(set) var currentAct: Int = 1
+    @Published private(set) var boardIndex: Int = 1
+    @Published private(set) var templateDisplayName: String = "STANDARD"
+    @Published private(set) var hasStones: Bool = false
+    @Published private(set) var isBoss: Bool = false
 
     // MARK: - Powerup state
 
@@ -73,12 +87,15 @@ final class GameSessionController: ObservableObject {
 
     let scene: BoardScene
 
-    private let dictionary: WordDictionary
+    private var dictionary: WordDictionary
     private var bag: LetterBag
     private var state: GameState
-    private var idleTimer: Timer? = nil
     private var hintTask: Task<Void, Never>? = nil
-    private let idleDelay: TimeInterval = 6.0
+
+    private struct ModifierWordContext {
+        var usedFreshTile: Bool = false
+    }
+    private var modifierWordContext = ModifierWordContext()
 
     // MARK: - Undo
 
@@ -89,11 +106,15 @@ final class GameSessionController: ObservableObject {
         let scoreThisBoard: Int
         let wordUseCounts: [String: Int]
         let pendingMoveFraction: Double
-        let lockRefundMovesGranted: Int
-        let lockRefundRealLocks: Int
+        let modifierPendingMoveFraction: Double
         let freshSparkCount: Int
-        let freeHintUsed: Bool
-        let freeUndoUsed: Bool
+        let freeHintChargesRemaining: Int
+        let freeUndoChargesRemaining: Int
+        let runTotalScore: Int
+        let runLocksBrokenTotal: Int
+        let runWordsBuiltTotal: Int
+        let runBestWord: String
+        let runBestWordScore: Int
     }
 
     private var undoSnapshot: UndoSnapshot? = nil {
@@ -177,8 +198,6 @@ final class GameSessionController: ObservableObject {
         toastTask = nil
         submitFeedbackResetTask?.cancel()
         submitFeedbackResetTask = nil
-        idleTimer?.invalidate()
-        idleTimer = nil
         clearHint()
         scene.wildcardPlacingMode = false
         var fresh = RunState()
@@ -188,8 +207,17 @@ final class GameSessionController: ObservableObject {
         fresh.inventory.hints    = 1
         runState = fresh
         showRunSummary = false
+        runSummaryBoard = 0
+        runSummaryWon = false
+        runSummarySnapshot = nil
         showPerkDraft = false
         showRoundClearStamp = false
+        runTotalScore = 0
+        runBoardsCleared = 0
+        runLocksBrokenTotal = 0
+        runWordsBuiltTotal = 0
+        runBestWord = ""
+        runBestWordScore = 0
         isPaused = false
         isAnimating = false
         isPlacingWildcard = false
@@ -206,7 +234,22 @@ final class GameSessionController: ObservableObject {
         roundClearTask = nil
         submitFeedbackResetTask?.cancel()
         submitFeedbackResetTask = nil
+        let totalBoards = RunState.Tunables.totalBoards
         let board = runState?.boardIndex ?? 0
+        let inferredCleared = won ? totalBoards : max(0, board - 1)
+        let boardsCleared = min(totalBoards, max(runBoardsCleared, inferredCleared))
+
+        runSummarySnapshot = RunSummarySnapshot(
+            wonRun: won,
+            totalScore: runTotalScore,
+            boardsCleared: boardsCleared,
+            totalBoards: totalBoards,
+            boardReached: board,
+            locksBroken: runLocksBrokenTotal,
+            wordsBuilt: runWordsBuiltTotal,
+            bestWord: runBestWord,
+            bestWordScore: runBestWordScore
+        )
         milestoneTracker.recordRunCompleted(boardReached: board)
         runSummaryBoard = board
         runSummaryWon = won
@@ -230,7 +273,8 @@ final class GameSessionController: ObservableObject {
         submitFeedbackResetTask = nil
         guard var run = runState else { return }
 
-        if !run.activePerks.contains(perkId) {
+        let duplicatesEnabled = run.activePerks.contains(.echoChamber)
+        if duplicatesEnabled || !run.activePerks.contains(perkId) {
             run.activePerks.append(perkId)
         }
 
@@ -263,10 +307,13 @@ final class GameSessionController: ObservableObject {
         submitFeedbackResetTask?.cancel()
         submitFeedbackResetTask = nil
         showRunSummary = false
+        runSummaryBoard = 0
+        runSummaryWon = false
         showRoundClearStamp = false
         showPerkDraft = false
         isPaused = false
         runState = nil
+        runSummarySnapshot = nil
         undoSnapshot = nil
         isPlacingWildcard = false
         scene.wildcardPlacingMode = false
@@ -290,6 +337,9 @@ final class GameSessionController: ObservableObject {
         runState = run
         showPerkDraft = false
         showRunSummary = false
+        runSummaryBoard = 0
+        runSummaryWon = false
+        runSummarySnapshot = nil
         showRoundClearStamp = false
         isPaused = false
         isPlacingWildcard = false
@@ -311,8 +361,11 @@ final class GameSessionController: ObservableObject {
         submitFeedbackResetTask?.cancel()
         submitFeedbackResetTask = nil
         runState = nil
+        runSummarySnapshot = nil
         showPerkDraft = false
         showRunSummary = false
+        runSummaryBoard = 0
+        runSummaryWon = false
         showRoundClearStamp = false
         isPaused = false
         isPlacingWildcard = false
@@ -326,31 +379,50 @@ final class GameSessionController: ObservableObject {
 
     // MARK: - Submit path
 
+    func computeSubmitCost(selectionIndices: [Int]) -> Int {
+        var cost = 1
+        let containsLocked = selectionIndices.contains { index in
+            guard index >= 0, index < state.tiles.count else { return false }
+            guard let tile = state.tiles[index], tile.isLetterTile else { return false }
+            return tile.freshness == .freshLocked
+        }
+        if containsLocked {
+            cost += 1
+        }
+        return cost
+    }
+
     func submitPath(indices: [Int]) {
         guard !isInputSuppressed else { return }
 
         clearHint()
         let scoreBeforeSubmit = state.score
+        let submitCost = computeSubmitCost(selectionIndices: indices)
+        guard state.moves >= submitCost else {
+            Haptics.notifyWarning()
+            showPowerupToast("Not enough moves")
+            syncDebugFields(locksBrokenThisMove: 0, submittedWord: "", status: "rejected:notEnoughMoves")
+            publishSubmitOutcome(.invalid, points: 0, autoReset: false)
+            return
+        }
 
         // Resolve any wildcard tiles in the path before sending to the resolver.
         var effectiveState = state
         if indices.contains(where: { state.tiles[$0]?.kind == .wildcard }) {
             guard let resolved = resolveWildcardsInPath(indices, tiles: state.tiles) else {
-                // No valid word found with wildcard substitutions — reject silently.
                 Haptics.notifyWarning()
                 syncDebugFields(locksBrokenThisMove: 0, submittedWord: "?", status: "rejected:wildcardNoMatch")
-                clearCurrentSelection()
                 publishSubmitOutcome(.invalid, points: 0, autoReset: false)
                 return
             }
-            // Apply resolved letters to a temporary state copy.
             for (boardIndex, letter) in resolved.substitutions {
                 effectiveState.tiles[boardIndex]?.letter = letter
             }
         }
 
-        // Capture board state before resolver mutates it (needed for freshSpark check).
         let preMoveState = effectiveState
+        // Tentatively spend submit moves before validation.
+        effectiveState.moves = max(0, effectiveState.moves - submitCost)
 
         var localBag = bag
         let result = Resolver.reduce(
@@ -360,88 +432,7 @@ final class GameSessionController: ObservableObject {
             bag: &localBag
         )
 
-        if result.accepted {
-            // Save undo snapshot BEFORE applying new state.
-            saveUndoSnapshot()
-
-            bag = localBag
-            state = result.newState
-            score = result.newState.score
-            moves = result.newState.moves
-            Haptics.submitAcceptedLight()
-
-            if var run = runState {
-                // --- New scoring: compute final word score with repeat penalty + floor ---
-                // Uses Scoring.wordScore so the penalty never truncates a word to 0 points.
-                let wordKey = (result.acceptedWord ?? "").uppercased()
-                let wordLen = wordKey.count
-                let useCount = run.wordUseCounts[wordKey, default: 0]
-                let letterSum = LetterValues.sum(for: wordKey)
-                let wordScore = Scoring.wordScore(letterSum: letterSum, length: wordLen, useCount: useCount)
-
-                // Replace the resolver's raw base score with our penalized + floored score.
-                // (Resolver already added result.scoreDelta; we correct it here.)
-                state.score = scoreBeforeSubmit + wordScore
-                score = state.score
-                run.wordUseCounts[wordKey] = useCount + 1
-
-                #if DEBUG
-                let lenMult = Scoring.lengthMultiplier(for: wordLen)
-                let repeatMult = Scoring.repeatMultiplier(useCount: useCount)
-                print("[Score] word=\(wordKey) baseSum=\(letterSum) lenMult=\(lenMult) useCount=\(useCount) repeatMult=\(repeatMult) wordScore=\(wordScore) scoreThisBoardBefore=\(run.scoreThisBoard)")
-                #endif
-
-                runState = run
-
-                // --- Perk effects (may further adjust score/moves) ---
-                processPerkEffects(
-                    word: result.acceptedWord ?? result.lastSubmittedWord,
-                    path: indices,
-                    preMoveState: preMoveState,
-                    result: result
-                )
-
-                // --- Built-in move refunds (fractional buffer) ---
-                if var runAfterPerks = runState {
-                    var frac = runAfterPerks.pendingMoveFraction
-                    if wordLen == 5 {
-                        frac += RunState.Tunables.fiveLetterRefund
-                    } else if wordLen >= 6 {
-                        frac += RunState.Tunables.sixLetterRefund
-                    }
-                    frac += Double(result.locksBrokenThisMove) * RunState.Tunables.lockBreakRefund
-                    let wholeMoves = Int(frac)
-                    runAfterPerks.pendingMoveFraction = frac - Double(wholeMoves)
-                    if wholeMoves > 0 { state.moves += wholeMoves }
-
-                    // Board score always increases by wordScore (>= minPoints, never 0).
-                    // Perk score adjustments affect state.score (total) but not the
-                    // board objective, keeping the objective readable and predictable.
-                    runAfterPerks.scoreThisBoard += wordScore
-
-                    #if DEBUG
-                    print("[Score] scoreThisBoardAfter=\(runAfterPerks.scoreThisBoard)")
-                    #endif
-
-                    runState = runAfterPerks
-                }
-
-                milestoneTracker.recordLocksBroken(result.locksBrokenThisMove)
-                if let word = result.acceptedWord {
-                    milestoneTracker.recordWord(word)
-                }
-
-                // Re-sync HUD after all adjustments.
-                score = state.score
-                moves = state.moves
-            }
-
-            syncDebugFields(
-                locksBrokenThisMove: result.locksBrokenThisMove,
-                submittedWord: result.lastSubmittedWord,
-                status: "accepted"
-            )
-        } else {
+        guard result.accepted else {
             Haptics.notifyWarning()
             let rejection = result.rejectionReason?.rawValue ?? "unknown"
             syncDebugFields(
@@ -449,16 +440,118 @@ final class GameSessionController: ObservableObject {
                 submittedWord: result.lastSubmittedWord,
                 status: "rejected:\(rejection)"
             )
+            // Invalid submit refunds full tentative cost by leaving persistent state unchanged.
+            publishSubmitOutcome(.invalid, points: 0, autoReset: false)
+            moves = state.moves
+            return
         }
 
-        // Clear selection immediately so the word pill resets before the animation plays.
-        clearCurrentSelection()
-        if result.accepted {
-            let pointsGained = max(0, state.score - scoreBeforeSubmit)
-            publishSubmitOutcome(.valid, points: pointsGained, autoReset: true)
-        } else {
-            publishSubmitOutcome(.invalid, points: 0, autoReset: false)
+        // Save undo snapshot BEFORE applying new state.
+        saveUndoSnapshot()
+
+        bag = localBag
+        state = result.newState
+        score = result.newState.score
+        moves = result.newState.moves
+        Haptics.submitAcceptedLight()
+
+        if var run = runState {
+            // --- New scoring: compute final word score with repeat penalty + floor ---
+            // Uses Scoring.wordScore so the penalty never truncates a word to 0 points.
+            let wordKey = (result.acceptedWord ?? "").uppercased()
+            let wordLen = wordKey.count
+            let useCount = run.wordUseCounts[wordKey, default: 0]
+            let letterSum = LetterValues.sum(for: wordKey)
+            let baseWordScore = Scoring.wordScore(letterSum: letterSum, length: wordLen, useCount: useCount)
+
+            // Replace the resolver's raw base score with our penalized + floored score.
+            // (Resolver already added result.scoreDelta; we correct it here.)
+            state.score = scoreBeforeSubmit + baseWordScore
+            score = state.score
+            let usedFreshTile = indices
+                .compactMap { preMoveState.tiles[$0] }
+                .contains { !preMoveState.usedTileIds.contains($0.id) }
+            modifierWordContext = ModifierWordContext(
+                usedFreshTile: usedFreshTile
+            )
+
+            #if DEBUG
+            let lenMult = Scoring.lengthMultiplier(for: wordLen)
+            let repeatMult = Scoring.repeatMultiplier(useCount: useCount)
+            print("[Score] word=\(wordKey) baseSum=\(letterSum) lenMult=\(lenMult) useCount=\(useCount) repeatMult=\(repeatMult) wordScore=\(baseWordScore) scoreThisBoardBefore=\(run.scoreThisBoard)")
+            #endif
+
+            let hookDelta = onWordAccepted(
+                word: wordKey,
+                length: wordLen,
+                baseScore: baseWordScore,
+                locksBrokenThisMove: result.locksBrokenThisMove,
+                run: &run
+            )
+            run.wordUseCounts[wordKey] = useCount + 1
+
+            if hookDelta.scoreDelta != 0 {
+                state.score = max(0, state.score + hookDelta.scoreDelta)
+            }
+            if hookDelta.moveDelta != 0 {
+                state.moves = max(0, state.moves + hookDelta.moveDelta)
+            }
+
+            run.locksBrokenThisBoard += max(0, result.locksBrokenThisMove + hookDelta.lockDelta)
+
+            // --- Built-in move refunds, modified by run-wide hooks ---
+            var frac = run.pendingMoveFraction
+            if wordLen == 5 {
+                frac += RunState.Tunables.fiveLetterRefund * run.lengthRefundMultiplierThisBoard
+            } else if wordLen >= 6 {
+                frac += RunState.Tunables.sixLetterRefund * run.lengthRefundMultiplierThisBoard
+            }
+            frac += Double(result.locksBrokenThisMove) * RunState.Tunables.lockBreakRefund * run.lockBreakRefundMultiplierThisBoard
+            let wholeMoves = Int(frac)
+            run.pendingMoveFraction = frac - Double(wholeMoves)
+            if wholeMoves > 0 { state.moves += wholeMoves }
+
+            let modifierWholeMoves = Int(run.modifierPendingMoveFraction)
+            if modifierWholeMoves > 0 {
+                state.moves += modifierWholeMoves
+                run.modifierPendingMoveFraction -= Double(modifierWholeMoves)
+            }
+
+            let boardWordScore = max(1, baseWordScore + hookDelta.scoreDelta)
+            run.scoreThisBoard += boardWordScore
+            runTotalScore += boardWordScore
+            runWordsBuiltTotal += 1
+            runLocksBrokenTotal += max(0, result.locksBrokenThisMove)
+            if boardWordScore > runBestWordScore {
+                runBestWordScore = boardWordScore
+                runBestWord = wordKey
+            }
+
+            #if DEBUG
+            print("[Score] scoreThisBoardAfter=\(run.scoreThisBoard)")
+            #endif
+
+            runState = run
+
+            milestoneTracker.recordLocksBroken(result.locksBrokenThisMove)
+            if let word = result.acceptedWord {
+                milestoneTracker.recordWord(word)
+            }
+
+            // Re-sync HUD after all adjustments.
+            score = state.score
+            moves = state.moves
         }
+
+        syncDebugFields(
+            locksBrokenThisMove: result.locksBrokenThisMove,
+            submittedWord: result.lastSubmittedWord,
+            status: "accepted"
+        )
+
+        clearCurrentSelection()
+        let pointsGained = max(0, state.score - scoreBeforeSubmit)
+        publishSubmitOutcome(.valid, points: pointsGained, autoReset: true)
 
         isAnimating = true
         updateSceneInputLock()
@@ -470,7 +563,6 @@ final class GameSessionController: ObservableObject {
                 checkRunConditions()
             }
             updateSceneInputLock()
-            resetIdleTimer()
             return
         }
 
@@ -478,7 +570,6 @@ final class GameSessionController: ObservableObject {
             guard let self else { return }
             self.scene.renderBoard(tiles: self.state.tiles)
             self.isAnimating = false
-            self.resetIdleTimer()
             if self.runState != nil, result.accepted {
                 self.checkRunConditions()
             }
@@ -495,9 +586,9 @@ final class GameSessionController: ObservableObject {
         isPlacingWildcard = false
         scene.wildcardPlacingMode = false
 
-        // Free hint perk: one free hint per board before consuming inventory.
-        if run.activePerks.contains(.freeHint), !run.freeHintUsed {
-            run.freeHintUsed = true
+        // Board-level free hint charges from modifiers.
+        if run.freeHintChargesRemaining > 0 {
+            run.freeHintChargesRemaining -= 1
             runState = run
         } else {
             guard run.inventory.consume(.hint) else { return }
@@ -509,7 +600,7 @@ final class GameSessionController: ObservableObject {
 
     // MARK: - Powerup: Shuffle
 
-    /// Shuffles non-locked, non-wildcard tiles using this board's shuffle budget.
+    /// Shuffles letters within each column segment (split by stones/mask) using this board's shuffle budget.
     func useShuffle() {
         guard !isInputSuppressed else { return }
         guard var run = runState else { return }
@@ -601,7 +692,12 @@ final class GameSessionController: ObservableObject {
         guard !isInputSuppressed else { return }
         guard var run = runState else { return }
         guard let snap = undoSnapshot else { return }
-        guard run.inventory.consume(.undo) else { return }
+        let usedFreeUndo = run.freeUndoChargesRemaining > 0
+        if usedFreeUndo {
+            run.freeUndoChargesRemaining -= 1
+        } else {
+            guard run.inventory.consume(.undo) else { return }
+        }
         isPlacingWildcard = false
         scene.wildcardPlacingMode = false
 
@@ -612,18 +708,26 @@ final class GameSessionController: ObservableObject {
 
         // Restore run fields affected by gameplay
         run.inventory = snap.inventory
-        // Re-apply the consumed undo (consume reduced it, but snap has pre-submit value)
-        _ = run.inventory.consume(.undo)
+        // Re-apply undo cost, because snapshot has pre-undo values.
+        if usedFreeUndo {
+            run.freeUndoChargesRemaining = max(0, snap.freeUndoChargesRemaining - 1)
+        } else {
+            _ = run.inventory.consume(.undo)
+            run.freeUndoChargesRemaining = snap.freeUndoChargesRemaining
+        }
         run.locksBrokenThisBoard   = snap.locksBrokenThisBoard
         run.scoreThisBoard         = snap.scoreThisBoard
         run.wordUseCounts          = snap.wordUseCounts
         run.pendingMoveFraction    = snap.pendingMoveFraction
-        run.lockRefundMovesGranted = snap.lockRefundMovesGranted
-        run.lockRefundRealLocks    = snap.lockRefundRealLocks
+        run.modifierPendingMoveFraction = snap.modifierPendingMoveFraction
         run.freshSparkCount        = snap.freshSparkCount
-        run.freeHintUsed           = snap.freeHintUsed
-        run.freeUndoUsed           = snap.freeUndoUsed
+        run.freeHintChargesRemaining = snap.freeHintChargesRemaining
         runState = run
+        runTotalScore = snap.runTotalScore
+        runLocksBrokenTotal = snap.runLocksBrokenTotal
+        runWordsBuiltTotal = snap.runWordsBuiltTotal
+        runBestWord = snap.runBestWord
+        runBestWordScore = snap.runBestWordScore
 
         undoSnapshot = nil
 
@@ -637,6 +741,25 @@ final class GameSessionController: ObservableObject {
     func currentBoard() -> [Tile?] {
         state.tiles
     }
+
+    #if DEBUG
+    func configureForTesting(
+        state: GameState,
+        dictionary: WordDictionary,
+        bag: LetterBag = LetterBag(),
+        runState: RunState? = nil
+    ) {
+        self.state = state
+        self.dictionary = dictionary
+        self.bag = bag
+        self.runState = runState
+        scene.configureGrid(rows: state.rows, cols: state.cols)
+        scene.renderBoard(tiles: state.tiles)
+        syncHUD()
+        syncDebugFields(locksBrokenThisMove: 0, submittedWord: "", status: "testConfigured")
+        clearSubmitFeedback()
+    }
+    #endif
 
     /// Clears the current tile selection from both the scene and published state.
     func clearCurrentSelection() {
@@ -660,15 +783,6 @@ final class GameSessionController: ObservableObject {
     private func configureSceneCallbacks() {
         scene.onRequestBoard = { [weak self] in
             self?.currentBoard() ?? []
-        }
-        scene.onRequestAdjacencyMode = { [weak self] in
-            self?.state.boardTemplate.adjacency ?? .hvOnly
-        }
-
-        scene.onAnyTouch = { [weak self] in
-            Task { @MainActor in
-                self?.handleAnyTouch()
-            }
         }
 
         scene.onSelectionChanged = { [weak self] indices in
@@ -714,136 +828,395 @@ final class GameSessionController: ObservableObject {
     /// Seeds a fresh board with the correct move count for the given board index.
     private func resetBoardForRound(_ boardIdx: Int) {
         let template = BoardTemplate.template(for: boardIdx)
-        let movesCount = RunState.moves(for: boardIdx)
-        let lockTarget = RunState.locksGoal(for: boardIdx, template: template)
+        let baseMoves = RunState.moves(for: boardIdx)
+        let baseLockTarget = RunState.locksGoal(for: boardIdx, template: template)
+        let baseScoreTarget = RunState.scoreGoal(for: boardIdx, template: template)
+
+        guard var run = runState else { return }
+        let boardStart = onBoardStart(
+            baseMoves: baseMoves,
+            baseLockTarget: baseLockTarget,
+            baseScoreTarget: baseScoreTarget,
+            baseShuffles: RunState.Tunables.shufflesPerBoard
+        )
+        run.lockTargetThisBoard = boardStart.lockTarget
+        run.scoreTargetThisBoard = boardStart.scoreTarget
+        run.shufflesRemaining = boardStart.shuffles
+        run.freeHintChargesRemaining = boardStart.freeHintCharges
+        run.freeUndoChargesRemaining = boardStart.freeUndoCharges
+        run.lengthRefundMultiplierThisBoard = boardStart.lengthRefundMultiplier
+        run.lockBreakRefundMultiplierThisBoard = boardStart.lockBreakRefundMultiplier
+        run.guaranteedBonusRewardsThisBoard = boardStart.guaranteedBonusRewards
+        run.extraRewardRollChanceThisBoard = boardStart.extraRewardRollChance
+        run.rewardHintWeightDeltaThisBoard = boardStart.rewardHintWeightDelta
+        run.rewardWildcardWeightDeltaThisBoard = boardStart.rewardWildcardWeightDelta
+        run.rewardUndoWeightDeltaThisBoard = boardStart.rewardUndoWeightDelta
+        runState = run
 
         var newBag = LetterBag()
-        // rareRelief: prevent Q/Z/X/J/K from spawning for the entire run
-        if let run = runState, run.activePerks.contains(.rareRelief) {
-            newBag.excludedLetters = ["Q", "Z", "X", "J", "K"]
-        }
+        newBag.excludedLetters = boardStart.excludedLetters
         bag = newBag
 
         var initialBag = bag
         state = Resolver.initialState(
             template: template,
-            moves: movesCount,
+            moves: boardStart.moves,
             dictionary: dictionary,
             bag: &initialBag,
-            lockObjectiveTarget: lockTarget
+            lockObjectiveTarget: boardStart.lockTarget
         )
         // Preserve excludedLetters through the bag copy
         bag = initialBag
         bag.excludedLetters = newBag.excludedLetters
 
-        // tightGloves: +3 bonus moves at the start of each board
-        if let run = runState, run.activePerks.contains(.tightGloves) {
-            state.moves += 3
-        }
-
         scene.configureGrid(rows: template.rows, cols: template.cols)
         scene.renderBoard(tiles: state.tiles)
+        publishBoardIntro(boardIdx: boardIdx, template: template)
         resetWordFeedback()
         syncHUD()
         syncDebugFields(locksBrokenThisMove: 0, submittedWord: "", status: "boardStart:\(boardIdx)")
     }
 
-    // MARK: - Perk hooks
+    private func publishBoardIntro(boardIdx: Int, template: BoardTemplate) {
+        boardIndex = boardIdx
+        currentAct = max(1, min(3, ((boardIdx - 1) / 5) + 1))
+        isBoss = boardIdx % 5 == 0
+        hasStones = !template.stones.isEmpty
+        templateDisplayName = templateBannerName(for: template, isBoss: isBoss)
 
-    /// Applies active perk effects after a valid word is accepted.
-    /// Mutates `state.score`, `state.moves`, and `runState.locksBrokenThisBoard`.
-    private func processPerkEffects(
+        // Pulse the trigger so GameScreen can show the intro each new board.
+        showBanner = false
+        DispatchQueue.main.async { [weak self] in
+            self?.showBanner = true
+        }
+    }
+
+    private func templateBannerName(for template: BoardTemplate, isBoss: Bool) -> String {
+        if isBoss {
+            return "BOSS"
+        }
+        let id = template.id.lowercased()
+        if id.contains("diamond") {
+            return "DIAMOND"
+        }
+        if id.contains("six") {
+            return "SIX"
+        }
+        if id.contains("standard") {
+            return "STANDARD"
+        }
+
+        return template.name.uppercased()
+    }
+
+    // MARK: - Modifier hooks
+
+    private struct WordAcceptedHookDelta {
+        var scoreDelta: Int = 0
+        var moveDelta: Int = 0
+        var lockDelta: Int = 0
+    }
+
+    private struct BoardStartHookResult {
+        var moves: Int
+        var lockTarget: Int
+        var scoreTarget: Int
+        var shuffles: Int
+        var freeHintCharges: Int
+        var freeUndoCharges: Int
+        var lengthRefundMultiplier: Double
+        var lockBreakRefundMultiplier: Double
+        var guaranteedBonusRewards: Int
+        var extraRewardRollChance: Double
+        var rewardHintWeightDelta: Int
+        var rewardWildcardWeightDelta: Int
+        var rewardUndoWeightDelta: Int
+        var excludedLetters: Set<Character>
+    }
+
+    private struct BoardClearHookResult {
+        var rewardTable: [(PowerupType, Int)]
+        var guaranteedBonusRewards: Int
+        var extraRewardRollChance: Double
+    }
+
+    /// Centralized run-wide word hook.
+    /// Returns score/move/lock deltas that apply after a valid word resolve.
+    private func onWordAccepted(
         word: String,
-        path: [Int],
-        preMoveState: GameState,
-        result: ResolverResult
-    ) {
-        guard var run = runState else { return }
-
-        let wordLen = word.count
+        length: Int,
+        baseScore: Int,
+        locksBrokenThisMove: Int,
+        run: inout RunState
+    ) -> WordAcceptedHookDelta {
+        var delta = WordAcceptedHookDelta()
         let upper = word.uppercased()
         let vowelCount = upper.filter { LetterBag.vowelSet.contains($0) }.count
-        let isStraight = Selection.isStraightContiguous(
-            path, rows: state.rows, cols: state.cols, allowedLengths: 3...6
+
+        for modifier in run.activePerks {
+            switch modifier {
+            case .lockRefund:
+                if locksBrokenThisMove > 0 {
+                    run.modifierPendingMoveFraction += 0.5 * Double(locksBrokenThisMove)
+                } else {
+                    delta.scoreDelta -= 6
+                }
+            case .freshSpark:
+                if modifierWordContext.usedFreshTile, run.freshSparkCount < 3 {
+                    delta.lockDelta += 1
+                    run.freshSparkCount += 1
+                }
+            case .longBreaker:
+                switch length {
+                case 3: delta.lockDelta -= 1
+                case 5: delta.lockDelta += 1
+                case 6: delta.lockDelta += 2
+                default: break
+                }
+            case .straightShooter:
+                break
+            case .freeHint:
+                break
+            case .freeUndo:
+                break
+            case .rareRelief:
+                delta.scoreDelta -= 5
+            case .consonantCrunch:
+                if vowelCount <= 1 {
+                    delta.scoreDelta += 12
+                    delta.lockDelta += 1
+                } else if vowelCount >= 3 {
+                    delta.scoreDelta -= 8
+                }
+            case .vowelBloom:
+                delta.scoreDelta += vowelCount > 0 ? vowelCount * 4 : -8
+            case .tightGloves:
+                if length == 3 {
+                    delta.scoreDelta -= 12
+                }
+            case .lockSplash:
+                if locksBrokenThisMove >= 2 {
+                    delta.lockDelta += 2
+                    delta.scoreDelta -= 10
+                }
+            case .bigGame:
+                if length >= 6 {
+                    delta.scoreDelta += Int((Double(baseScore) * 0.40).rounded())
+                } else if length == 3 {
+                    delta.scoreDelta -= Int((Double(baseScore) * 0.25).rounded())
+                }
+            case .vowelBloomPlus:
+                delta.scoreDelta += Int((Double(baseScore) * 0.30).rounded())
+            case .overclockedBoots:
+                break
+            case .austerityPact:
+                delta.scoreDelta += Int((Double(baseScore) * 0.35).rounded())
+            case .wildcardSmith:
+                break
+            case .salvageRights:
+                break
+            case .bossHunter:
+                break
+            case .titanTribute:
+                if run.isBossBoard {
+                    delta.scoreDelta += Int((Double(baseScore) * 0.40).rounded())
+                } else {
+                    delta.scoreDelta -= Int((Double(baseScore) * 0.10).rounded())
+                }
+            case .echoChamber:
+                break
+            }
+        }
+
+        return delta
+    }
+
+    /// Centralized run-wide board-start hook.
+    /// Applies moves/targets/shuffles/reward-state modifiers for this board.
+    private func onBoardStart(
+        baseMoves: Int,
+        baseLockTarget: Int,
+        baseScoreTarget: Int,
+        baseShuffles: Int
+    ) -> BoardStartHookResult {
+        guard let run = runState else {
+            return BoardStartHookResult(
+                moves: baseMoves,
+                lockTarget: baseLockTarget,
+                scoreTarget: baseScoreTarget,
+                shuffles: baseShuffles,
+                freeHintCharges: 0,
+                freeUndoCharges: 0,
+                lengthRefundMultiplier: 1.0,
+                lockBreakRefundMultiplier: 1.0,
+                guaranteedBonusRewards: 0,
+                extraRewardRollChance: 0.0,
+                rewardHintWeightDelta: 0,
+                rewardWildcardWeightDelta: 0,
+                rewardUndoWeightDelta: 0,
+                excludedLetters: []
+            )
+        }
+
+        var moves = baseMoves
+        var shuffles = baseShuffles
+        var freeHints = 0
+        var freeUndos = 0
+
+        var lockTargetFlat = 0
+        var scoreTargetMultiplier = 1.0
+
+        var lengthRefundMultiplier = 1.0
+        let lockBreakRefundMultiplier = 1.0
+        var guaranteedBonusRewards = 0
+        var extraRewardRollChance = 0.0
+        var rewardHintWeightDelta = 0
+        var rewardWildcardWeightDelta = 0
+        let rewardUndoWeightDelta = 0
+        var excludedLetters: Set<Character> = []
+
+        for modifier in run.activePerks {
+            switch modifier {
+            case .lockRefund:
+                break
+            case .freshSpark:
+                break
+            case .longBreaker:
+                break
+            case .straightShooter:
+                shuffles += 1
+                moves -= 1
+            case .freeHint:
+                freeHints += 1
+                scoreTargetMultiplier *= 1.10
+            case .freeUndo:
+                freeUndos += 1
+                scoreTargetMultiplier *= 1.08
+            case .rareRelief:
+                excludedLetters.formUnion(["Q", "Z", "X", "J", "K"])
+            case .consonantCrunch:
+                break
+            case .vowelBloom:
+                break
+            case .tightGloves:
+                moves += 1
+            case .lockSplash:
+                break
+            case .bigGame:
+                break
+            case .vowelBloomPlus:
+                lengthRefundMultiplier = 0.0
+            case .overclockedBoots:
+                moves += 2
+                scoreTargetMultiplier *= 1.20
+            case .austerityPact:
+                moves -= 2
+            case .wildcardSmith:
+                rewardWildcardWeightDelta += 20
+                rewardHintWeightDelta -= 10
+            case .salvageRights:
+                lockTargetFlat += 1
+                extraRewardRollChance += 0.35
+            case .bossHunter:
+                break
+            case .titanTribute:
+                break
+            case .echoChamber:
+                break
+            }
+        }
+
+        var lockTarget = max(1, baseLockTarget + lockTargetFlat)
+        var scoreTarget = max(1, Int(ceil(Double(baseScoreTarget) * scoreTargetMultiplier)))
+
+        onBossBoard(
+            moves: &moves,
+            lockTarget: &lockTarget,
+            scoreTarget: &scoreTarget,
+            guaranteedBonusRewards: &guaranteedBonusRewards,
+            activeModifiers: run.activePerks,
+            isBossBoard: run.isBossBoard
         )
 
-        var runLockProgress = result.locksBrokenThisMove
-        var scoreAdj = 0
-        var moveAdj = 0
+        return BoardStartHookResult(
+            moves: max(1, moves),
+            lockTarget: lockTarget,
+            scoreTarget: scoreTarget,
+            shuffles: max(0, shuffles),
+            freeHintCharges: max(0, freeHints),
+            freeUndoCharges: max(0, freeUndos),
+            lengthRefundMultiplier: max(0, lengthRefundMultiplier),
+            lockBreakRefundMultiplier: max(0, lockBreakRefundMultiplier),
+            guaranteedBonusRewards: max(0, guaranteedBonusRewards),
+            extraRewardRollChance: min(0.95, max(0, extraRewardRollChance)),
+            rewardHintWeightDelta: rewardHintWeightDelta,
+            rewardWildcardWeightDelta: rewardWildcardWeightDelta,
+            rewardUndoWeightDelta: rewardUndoWeightDelta,
+            excludedLetters: excludedLetters
+        )
+    }
 
-        // longBreaker: override lock progress by word length
-        if run.activePerks.contains(.longBreaker) {
-            switch wordLen {
-            case 3: runLockProgress = 0
-            case 5: runLockProgress += 1
-            case 6: runLockProgress += 2
-            default: break
+    /// Centralized boss-board hook for boss-specific modifier effects.
+    private func onBossBoard(
+        moves: inout Int,
+        lockTarget: inout Int,
+        scoreTarget: inout Int,
+        guaranteedBonusRewards: inout Int,
+        activeModifiers: [PerkID],
+        isBossBoard: Bool
+    ) {
+        for modifier in activeModifiers {
+            switch modifier {
+            case .bossHunter:
+                if isBossBoard {
+                    moves += 2
+                    lockTarget = max(1, Int(ceil(Double(lockTarget) * 0.85)))
+                } else {
+                    moves -= 1
+                }
+            case .titanTribute:
+                if isBossBoard {
+                    guaranteedBonusRewards += 1
+                }
+            default:
+                break
             }
         }
+    }
 
-        // tightGloves: 3-letter words yield zero lock progress
-        if run.activePerks.contains(.tightGloves), wordLen == 3 {
-            runLockProgress = 0
+    /// Centralized board-clear hook for reward table and bonus grants.
+    private func onBoardClear(baseRewardTable: [(PowerupType, Int)]) -> BoardClearHookResult {
+        guard let run = runState else {
+            return BoardClearHookResult(
+                rewardTable: baseRewardTable,
+                guaranteedBonusRewards: 0,
+                extraRewardRollChance: 0
+            )
         }
 
-        // freshSpark: first never-used tile in path → +1 lock progress (max 3/board)
-        if run.activePerks.contains(.freshSpark), run.freshSparkCount < 3 {
-            let hasNewTile = path
-                .compactMap { preMoveState.tiles[$0] }
-                .contains { !preMoveState.usedTileIds.contains($0.id) }
-            if hasNewTile {
-                runLockProgress += 1
-                run.freshSparkCount += 1
-            }
+        var hintWeight = baseRewardTable.first(where: { $0.0 == .hint })?.1 ?? 0
+        var wildcardWeight = baseRewardTable.first(where: { $0.0 == .wildcard })?.1 ?? 0
+        var undoWeight = baseRewardTable.first(where: { $0.0 == .undo })?.1 ?? 0
+
+        hintWeight = max(0, hintWeight + run.rewardHintWeightDeltaThisBoard)
+        wildcardWeight = max(0, wildcardWeight + run.rewardWildcardWeightDeltaThisBoard)
+        undoWeight = max(0, undoWeight + run.rewardUndoWeightDeltaThisBoard)
+
+        var table: [(PowerupType, Int)] = [
+            (.hint, hintWeight),
+            (.wildcard, wildcardWeight),
+            (.undo, undoWeight)
+        ]
+        let totalWeight = table.reduce(0) { $0 + $1.1 }
+        if totalWeight <= 0 {
+            table = baseRewardTable
         }
 
-        // straightShooter: straight path → +1 lock; turning path → -15 score
-        if run.activePerks.contains(.straightShooter) {
-            if isStraight {
-                runLockProgress += 1
-            } else {
-                scoreAdj -= 15
-            }
-        }
-
-        // consonantCrunch: ≤1 vowel → +1 lock; each vowel → -1 score
-        if run.activePerks.contains(.consonantCrunch) {
-            if vowelCount <= 1 {
-                runLockProgress += 1
-            }
-            scoreAdj -= vowelCount
-        }
-
-        // vowelBloom: +5 score per vowel; -5 if no vowels
-        if run.activePerks.contains(.vowelBloom) {
-            scoreAdj += vowelCount > 0 ? vowelCount * 5 : -5
-        }
-
-        // rareRelief: -5 score per word (rare-letter spawn filter via bag.excludedLetters)
-        if run.activePerks.contains(.rareRelief) {
-            scoreAdj -= 5
-        }
-
-        // lockRefund: every 3 real locks broken → +1 move (cap: +2/board)
-        if run.activePerks.contains(.lockRefund) {
-            let prevLocks = run.lockRefundRealLocks
-            let newLocks = prevLocks + result.locksBrokenThisMove
-            run.lockRefundRealLocks = newLocks
-            let prevGrants = run.lockRefundMovesGranted
-            let newGrants = min(2, newLocks / 3)
-            let granted = newGrants - prevGrants
-            if granted > 0 {
-                moveAdj += granted
-                run.lockRefundMovesGranted = newGrants
-            }
-        }
-
-        // Apply adjustments to live game state
-        if scoreAdj != 0 { state.score = max(0, state.score + scoreAdj) }
-        if moveAdj > 0   { state.moves += moveAdj }
-
-        run.locksBrokenThisBoard += max(0, runLockProgress)
-        runState = run
+        return BoardClearHookResult(
+            rewardTable: table,
+            guaranteedBonusRewards: run.guaranteedBonusRewardsThisBoard,
+            extraRewardRollChance: run.extraRewardRollChanceThisBoard
+        )
     }
 
     // MARK: - Run condition check
@@ -872,35 +1245,64 @@ final class GameSessionController: ObservableObject {
     private func grantRoundReward() {
         guard var run = runState else { return }
 
-        let rewardTable: [(PowerupType, Int)] = [
+        let baseRewardTable: [(PowerupType, Int)] = [
             (.hint,     45),
             (.wildcard, 30),
             (.undo,     25)
         ]
+        let hook = onBoardClear(baseRewardTable: baseRewardTable)
 
-        let total = rewardTable.reduce(0) { $0 + $1.1 }
-        let roll = Int.random(in: 0..<total)
-        var cumulative = 0
-        var chosen: PowerupType = .hint
+        func pickReward(_ table: [(PowerupType, Int)]) -> PowerupType {
+            let total = table.reduce(0) { $0 + max(0, $1.1) }
+            guard total > 0 else { return .hint }
+            let roll = Int.random(in: 0..<total)
+            var cumulative = 0
+            for (type, weight) in table {
+                cumulative += max(0, weight)
+                if roll < cumulative {
+                    return type
+                }
+            }
+            return .hint
+        }
 
-        for (type, weight) in rewardTable {
-            cumulative += weight
-            if roll < cumulative {
-                chosen = type
-                break
+        var granted: [PowerupType] = []
+        let firstReward = pickReward(hook.rewardTable)
+        run.inventory.grantPowerup(firstReward)
+        granted.append(firstReward)
+
+        if hook.guaranteedBonusRewards > 0 {
+            for _ in 0..<hook.guaranteedBonusRewards {
+                let extra = pickReward(hook.rewardTable)
+                run.inventory.grantPowerup(extra)
+                granted.append(extra)
             }
         }
 
-        run.inventory.grantPowerup(chosen)
+        if hook.extraRewardRollChance > 0, Double.random(in: 0..<1) < hook.extraRewardRollChance {
+            let extra = pickReward(hook.rewardTable)
+            run.inventory.grantPowerup(extra)
+            granted.append(extra)
+        }
+
         runState = run
-        showPowerupToast("+1 \(chosen.displayName)")
+        let byType = Dictionary(grouping: granted, by: { $0 }).mapValues { $0.count }
+        let toast = byType
+            .map { key, value in "+\(value) \(key.displayName)" }
+            .sorted()
+            .joined(separator: "  ")
+        showPowerupToast(toast)
     }
 
     // MARK: - Round clear transition
 
     private func beginRoundClearTransition() {
-        guard runState != nil else { return }
+        guard let run = runState else { return }
         guard !showRoundClearStamp else { return }
+        runBoardsCleared = min(
+            RunState.Tunables.totalBoards,
+            max(runBoardsCleared, run.boardIndex)
+        )
 
         roundClearTask?.cancel()
         roundClearTask = Task { @MainActor [weak self] in
@@ -919,7 +1321,13 @@ final class GameSessionController: ObservableObject {
             try? await Task.sleep(
                 nanoseconds: UInt64(Tunables.roundClearStampDuration * 1_000_000_000)
             )
-            guard !Task.isCancelled, self.runState != nil else { return }
+            guard !Task.isCancelled, let run = self.runState else { return }
+
+            if run.boardIndex >= RunState.Tunables.totalBoards {
+                self.showRoundClearStamp = false
+                self.endRun(won: true)
+                return
+            }
 
             self.perkDraftOptions = self.generatePerkDraftOptions()
             self.showPerkDraft = true
@@ -933,40 +1341,61 @@ final class GameSessionController: ObservableObject {
     func generatePerkDraftOptions() -> [Perk] {
         guard let run = runState else { return [] }
 
-        let activeSet = Set(run.activePerks)
         let unlocked = milestoneTracker.unlockedPerks
+        let duplicatesEnabled = run.activePerks.contains(.echoChamber)
 
-        // Prefer perks not already active
-        var pool = unlocked.subtracting(activeSet).map { $0.definition }
+        var poolIDs: [PerkID]
+        if duplicatesEnabled {
+            poolIDs = Array(unlocked)
+        } else {
+            let active = Set(run.activePerks)
+            poolIDs = Array(unlocked.subtracting(active))
+        }
+        if poolIDs.isEmpty {
+            poolIDs = Array(unlocked)
+        }
 
         var selected: [Perk] = []
+        var selectedIDs: Set<PerkID> = []
 
-        // Act 1 (boards 1–4): ensure at least one lock-help modifier in the draft
-        if run.boardIndex <= 4 {
-            if let helper = pool.filter({ $0.isLockHelp }).randomElement() {
-                selected.append(helper)
-                pool.removeAll { $0.id == helper.id }
-            }
+        while selected.count < 3 {
+            let available = poolIDs.filter { !selectedIDs.contains($0) }
+            guard !available.isEmpty else { break }
+
+            let rolledRarity = rollDraftRarity()
+            let rarityCandidates = available.filter { $0.definition.rarity == rolledRarity }
+            let source = rarityCandidates.isEmpty ? available : rarityCandidates
+            guard let chosen = source.randomElement() else { break }
+
+            selected.append(chosen.definition)
+            selectedIDs.insert(chosen)
         }
 
-        for perk in pool.shuffled() {
-            guard selected.count < 3 else { break }
-            if !selected.contains(where: { $0.id == perk.id }) {
-                selected.append(perk)
-            }
-        }
-
-        // If pool ran dry, allow repeats from all unlocked perks
         if selected.count < 3 {
-            for perk in unlocked.map({ $0.definition }).shuffled() {
+            for candidate in Array(unlocked).shuffled() {
                 guard selected.count < 3 else { break }
-                if !selected.contains(where: { $0.id == perk.id }) {
-                    selected.append(perk)
-                }
+                guard !selectedIDs.contains(candidate) else { continue }
+                selected.append(candidate.definition)
+                selectedIDs.insert(candidate)
             }
         }
 
         return Array(selected.prefix(3))
+    }
+
+    private func rollDraftRarity() -> ModifierRarity {
+        let weights = ModifierDraftTunables.rarityWeights
+        let total = weights.values.reduce(0, +)
+        guard total > 0 else { return .common }
+        let roll = Int.random(in: 0..<total)
+        var cumulative = 0
+        for rarity in ModifierRarity.allCases {
+            cumulative += max(0, weights[rarity] ?? 0)
+            if roll < cumulative {
+                return rarity
+            }
+        }
+        return .common
     }
 
     // MARK: - Wildcard resolution
@@ -1037,28 +1466,72 @@ final class GameSessionController: ObservableObject {
 
     // MARK: - Shuffle helpers
 
-    /// Shuffles non-locked, non-wildcard tiles among their own positions.
+    /// Shuffles letters in-place within each column segment.
+    /// Segments are separated by stones and non-playable cells.
+    /// Metadata (lock state, wildcard kind, infusion, IDs) is preserved.
     private func shuffledTiles(_ tiles: [Tile?]) -> [Tile?] {
-        var moveableIndices: [Int] = []
-        var moveableTiles: [Tile] = []
+        var result = tiles
+        let rows = state.rows
+        let cols = state.cols
+        let template = state.boardTemplate
 
-        for i in tiles.indices {
-            guard let tile = tiles[i] else { continue }
-            if tile.isLetterTile && tile.freshness != .freshLocked && tile.kind != .wildcard {
-                moveableIndices.append(i)
-                moveableTiles.append(tile)
+        for col in 0..<cols {
+            for segment in columnSegments(col: col, rows: rows, cols: cols, template: template) {
+                let letterIndices = segment.filter { index in
+                    guard let tile = tiles[index] else { return false }
+                    guard tile.isLetterTile else { return false }
+                    // Preserve wildcard behavior by keeping wildcard letters unchanged.
+                    return tile.kind != .wildcard
+                }
+                guard letterIndices.count >= 2 else { continue }
+
+                var shuffledLetters = letterIndices.compactMap { tiles[$0]?.letter }
+                shuffledLetters.shuffle()
+
+                for (offset, index) in letterIndices.enumerated() {
+                    guard var tile = result[index] else { continue }
+                    tile.letter = shuffledLetters[offset]
+                    result[index] = tile
+                }
             }
         }
 
-        moveableTiles.shuffle()
-        var result = tiles
-        for (i, index) in moveableIndices.enumerated() {
-            result[index] = moveableTiles[i]
-        }
         return result
     }
 
+    private func columnSegments(
+        col: Int,
+        rows: Int,
+        cols: Int,
+        template: BoardTemplate
+    ) -> [[Int]] {
+        var segments: [[Int]] = []
+        var activeSegment: [Int] = []
+
+        for row in 0..<rows {
+            let index = row * cols + col
+            let isBarrier = !template.isPlayable(index) || template.isStone(index)
+
+            if isBarrier {
+                if !activeSegment.isEmpty {
+                    segments.append(activeSegment)
+                    activeSegment.removeAll(keepingCapacity: true)
+                }
+                continue
+            }
+
+            activeSegment.append(index)
+        }
+
+        if !activeSegment.isEmpty {
+            segments.append(activeSegment)
+        }
+
+        return segments
+    }
+
     /// Regenerates non-locked, non-wildcard tiles with fresh letters from the bag.
+    /// Tile metadata and IDs are preserved.
     private func regenerateMoveableTiles() {
         var existingCounts: [Character: Int] = [:]
         for tile in state.tiles.compactMap({ $0 }) {
@@ -1071,37 +1544,25 @@ final class GameSessionController: ObservableObject {
         }
 
         for i in state.tiles.indices {
-            guard let tile = state.tiles[i] else { continue }
+            guard var tile = state.tiles[i] else { continue }
             if !tile.isLetterTile || tile.freshness == .freshLocked || tile.kind == .wildcard { continue }
-            state.tiles[i] = bag.nextTile(respecting: LetterBag.rareCaps, existingCounts: &existingCounts)
+            let next = bag.nextTile(respecting: LetterBag.rareCaps, existingCounts: &existingCounts)
+            tile.letter = next.letter
+            state.tiles[i] = tile
         }
     }
 
     private func injectGuaranteedHintPath() -> Bool {
         guard let guaranteedWord = guaranteedHintWord() else { return false }
         let letters = Array(guaranteedWord.uppercased())
-        guard letters.count == 3 else { return false }
+        guard (4...8).contains(letters.count) else { return false }
 
-        let cols = state.cols
         let tiles = state.tiles
+        let path = tiles.indices.filter { isMovableLetter(at: $0, in: tiles) }
+        guard path.count >= letters.count else { return false }
 
-        var chosenPath: [Int]? = nil
-
-        outer: for i in tiles.indices {
-            guard isMovableLetter(at: i, in: tiles) else { continue }
-            for j in neighbors(of: i, gridSize: cols, mode: state.boardTemplate.adjacency) {
-                guard isMovableLetter(at: j, in: tiles) else { continue }
-                for k in neighbors(of: j, gridSize: cols, mode: state.boardTemplate.adjacency) {
-                    guard k != i else { continue }
-                    guard isMovableLetter(at: k, in: tiles) else { continue }
-                    chosenPath = [i, j, k]
-                    break outer
-                }
-            }
-        }
-
-        guard let path = chosenPath else { return false }
         for (offset, index) in path.enumerated() {
+            guard offset < letters.count else { break }
             guard var tile = state.tiles[index], tile.isLetterTile else { return false }
             tile.letter = letters[offset]
             state.tiles[index] = tile
@@ -1110,7 +1571,10 @@ final class GameSessionController: ObservableObject {
     }
 
     private func guaranteedHintWord() -> String? {
-        let fallbackWords = ["cat", "dog", "sun", "run", "map", "tap", "red", "sea", "pen", "top"]
+        if let dictionaryWord = dictionary.firstWord(lengths: 4...6) {
+            return dictionaryWord
+        }
+        let fallbackWords = ["game", "word", "tile", "grid", "fall", "rain", "swift", "stone"]
         for word in fallbackWords where dictionary.contains(word) {
             return word
         }
@@ -1126,10 +1590,14 @@ final class GameSessionController: ObservableObject {
     private func boardHasValidHint(_ tiles: [Tile?]) -> Bool {
         var testState = state
         testState.tiles = tiles
-        guard let hint = HintFinder.findHint3(state: testState, dictionary: dictionary) else {
+        guard let hint = HintFinder.findFreePickHint(
+            state: testState,
+            dictionary: dictionary,
+            preferredLengths: [8, 7, 6, 5, 4]
+        ) else {
             return false
         }
-        return HintFinder.validateHint(hint.indices, state: testState, dictionary: dictionary)
+        return HintFinder.validateFreePickHint(hint, state: testState, dictionary: dictionary)
     }
 
     // MARK: - Undo snapshot
@@ -1143,11 +1611,15 @@ final class GameSessionController: ObservableObject {
             scoreThisBoard: run.scoreThisBoard,
             wordUseCounts: run.wordUseCounts,
             pendingMoveFraction: run.pendingMoveFraction,
-            lockRefundMovesGranted: run.lockRefundMovesGranted,
-            lockRefundRealLocks: run.lockRefundRealLocks,
+            modifierPendingMoveFraction: run.modifierPendingMoveFraction,
             freshSparkCount: run.freshSparkCount,
-            freeHintUsed: run.freeHintUsed,
-            freeUndoUsed: run.freeUndoUsed
+            freeHintChargesRemaining: run.freeHintChargesRemaining,
+            freeUndoChargesRemaining: run.freeUndoChargesRemaining,
+            runTotalScore: runTotalScore,
+            runLocksBrokenTotal: runLocksBrokenTotal,
+            runWordsBuiltTotal: runWordsBuiltTotal,
+            runBestWord: runBestWord,
+            runBestWordScore: runBestWordScore
         )
     }
 
@@ -1209,21 +1681,7 @@ final class GameSessionController: ObservableObject {
         currentWordText = ""
     }
 
-    // MARK: - Hint system
-
-    private func handleAnyTouch() {
-        clearHint()
-        resetIdleTimer()
-    }
-
-    private func resetIdleTimer() {
-        idleTimer?.invalidate()
-        idleTimer = Timer.scheduledTimer(withTimeInterval: idleDelay, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                self?.computeAndPublishHint()
-            }
-        }
-    }
+    // MARK: - Hint system (powerup-triggered only)
 
     private func clearHint() {
         hintTask?.cancel()
@@ -1231,7 +1689,6 @@ final class GameSessionController: ObservableObject {
         hintPath = nil
         hintWord = nil
         hintIsValid = false
-        scene.applyHint(nil)
     }
 
     private func computeAndPublishHint() {
@@ -1240,16 +1697,23 @@ final class GameSessionController: ObservableObject {
         let currentState = state
         let dict = dictionary
         hintTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let hint = HintFinder.findHint3(state: currentState, dictionary: dict)
-            let candidatePath = hint?.indices ?? []
-            let isValid = HintFinder.validateHint(candidatePath, state: currentState, dictionary: dict)
+            let hint = HintFinder.findFreePickHint(
+                state: currentState,
+                dictionary: dict,
+                preferredLengths: [6, 5, 4]
+            )
+            let isValid = hint.map { HintFinder.validateFreePickHint($0, state: currentState, dictionary: dict) } ?? false
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self, !Task.isCancelled else { return }
                 self.hintPath = isValid ? hint?.indices : nil
                 self.hintWord = isValid ? hint?.word : nil
                 self.hintIsValid = isValid
-                self.scene.applyHint(isValid ? hint?.indices : nil)
+                if let indices = hint?.indices, isValid {
+                    self.scene.setSelection(indices: indices)
+                } else {
+                    Haptics.notifyWarning()
+                }
             }
         }
     }
@@ -1266,8 +1730,8 @@ final class GameSessionController: ObservableObject {
         if let run = runState {
             shufflesRemaining = run.shufflesRemaining
             boardScore = run.scoreThisBoard
-            boardScoreTarget = RunState.scoreGoal(for: run.boardIndex, template: run.boardTemplate)
-            boardLockTarget = RunState.locksGoal(for: run.boardIndex, template: run.boardTemplate)
+            boardScoreTarget = run.scoreGoalForBoard
+            boardLockTarget = run.locksGoalForBoard
         }
     }
 

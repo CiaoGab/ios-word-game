@@ -13,6 +13,8 @@ struct GameScreen: View {
     @State private var showPause: Bool = false
     @State private var wordPillShakeTrigger: CGFloat = 0
     @State private var scorePops: [ScorePop] = []
+    @State private var showBoardIntroBanner: Bool = false
+    @State private var boardIntroTask: Task<Void, Never>? = nil
 
     private struct ScorePop: Identifiable {
         let id: UUID = UUID()
@@ -68,12 +70,16 @@ struct GameScreen: View {
             }
 
             // Run summary overlay (shown on run end)
-            if session.showRunSummary {
+            if session.showRunSummary, let summary = session.runSummarySnapshot {
                 RunSummaryView(
-                    boardReached: session.runSummaryBoard,
-                    wonRun: session.runSummaryWon,
-                    milestoneTracker: session.milestoneTracker,
-                    onDismiss: { onQuitToMenu() }
+                    snapshot: summary,
+                    onBackToMenu: {
+                        session.dismissRunSummary()
+                        onQuitToMenu()
+                    },
+                    onPlayAgain: {
+                        session.restartRun()
+                    }
                 )
                 .transition(.opacity.animation(.easeInOut(duration: 0.25)))
                 .zIndex(10)
@@ -162,6 +168,10 @@ struct GameScreen: View {
         .onAppear {
             session.startRun()
         }
+        .onDisappear {
+            boardIntroTask?.cancel()
+            boardIntroTask = nil
+        }
         .sheet(isPresented: $showPause) {
             PauseSheet(
                 onResume: { showPause = false },
@@ -178,6 +188,10 @@ struct GameScreen: View {
         }
         .onChange(of: showPause) { _, isShowing in
             session.setPaused(isShowing)
+        }
+        .onChange(of: session.showBanner) { _, shouldShow in
+            guard shouldShow else { return }
+            presentBoardIntroBanner()
         }
         .onChange(of: session.submitFeedbackEventID) { _, _ in
             switch session.lastSubmitOutcome {
@@ -210,6 +224,10 @@ struct GameScreen: View {
                 }
                 Spacer()
                 hudPill(title: "Moves", value: "\(session.moves)")
+                hudPill(
+                    title: "Mods",
+                    value: "\(run?.activePerks.count ?? 0)"
+                )
 
                 // Gear / pause button
                 Button {
@@ -306,6 +324,7 @@ struct GameScreen: View {
     private var boardSection: some View {
         GeometryReader { proxy in
             let boardShape = RoundedRectangle(cornerRadius: ParchmentTheme.Radius.boardOuter, style: .continuous)
+            let reduceMotion = AppSettings.reduceMotion
 
             SpriteView(
                 scene: session.scene,
@@ -316,6 +335,25 @@ struct GameScreen: View {
                 }
                 .onChange(of: proxy.size) { _, newSize in
                     session.updateSceneSize(newSize)
+                }
+                .overlay(alignment: .top) {
+                    if showBoardIntroBanner {
+                        BoardIntroBanner(
+                            currentAct: session.currentAct,
+                            boardIndex: session.boardIndex,
+                            templateDisplayName: session.templateDisplayName,
+                            hasStones: session.hasStones,
+                            isBoss: session.isBoss
+                        )
+                        .padding(.top, BoardIntroBanner.Tunables.topInset)
+                        .transition(
+                            reduceMotion
+                                ? .opacity
+                                : .move(edge: .top).combined(with: .opacity)
+                        )
+                        .zIndex(25)
+                        .allowsHitTesting(false)
+                    }
                 }
                 .overlay(alignment: .top) {
                     scorePopLayer
@@ -573,8 +611,17 @@ struct GameScreen: View {
     // MARK: - Submit row
 
     private var submitRow: some View {
-        let canSubmit = session.currentSelectionIndices.count >= 3 && !session.isPaused && !session.isAnimating
-            && !session.showPerkDraft && !session.showRunSummary && !session.showRoundClearStamp
+        let selectionCount = session.currentSelectionIndices.count
+        let submitCost = session.computeSubmitCost(selectionIndices: session.currentSelectionIndices)
+        let hasValidLength = (4...8).contains(selectionCount)
+        let canSubmit = hasValidLength
+            && session.moves >= submitCost
+            && !session.isPaused
+            && !session.isAnimating
+            && !session.showPerkDraft
+            && !session.showRunSummary
+            && !session.showRoundClearStamp
+        let costLabel = submitCost == 2 ? "Cost: 2 (LOCKED)" : "Cost: 1"
 
         return VStack(spacing: 4) {
             Button(action: {
@@ -588,7 +635,6 @@ struct GameScreen: View {
             }
             .buttonStyle(.plain)
             .disabled(!canSubmit)
-            // Subtle active glow — visible when selection is valid (≥3 letters)
             .shadow(
                 color: ParchmentTheme.Palette.footerRed.opacity(canSubmit ? 0.22 : 0),
                 radius: 10, x: 0, y: 2
@@ -598,8 +644,12 @@ struct GameScreen: View {
                     .onEnded { _ in session.clearCurrentSelection() }
             )
 
-            // Stable-height helper caption — visible only when submit is disabled
-            Text("Select 3–6 letters")
+            Text(costLabel)
+                .font(.parchmentRounded(size: 11, weight: .bold))
+                .foregroundStyle(ParchmentTheme.Palette.slate.opacity(0.8))
+                .opacity(selectionCount > 0 ? 1 : 0)
+
+            Text("Select 4–8 letters")
                 .font(.parchmentRounded(size: 11, weight: .bold))
                 .foregroundStyle(ParchmentTheme.Palette.slate.opacity(0.65))
                 .opacity(canSubmit ? 0 : 1)
@@ -723,6 +773,37 @@ struct GameScreen: View {
     private func enqueueScorePop(points: Int) {
         guard points > 0 else { return }
         scorePops.append(ScorePop(text: "+\(points)"))
+    }
+
+    private func presentBoardIntroBanner() {
+        let reduceMotion = AppSettings.reduceMotion
+        boardIntroTask?.cancel()
+
+        withAnimation(
+            reduceMotion
+                ? .easeOut(duration: BoardIntroBanner.Tunables.reducedInDuration)
+                : .spring(response: BoardIntroBanner.Tunables.inAnimationDuration, dampingFraction: 0.82)
+        ) {
+            showBoardIntroBanner = true
+        }
+
+        boardIntroTask = Task { @MainActor in
+            try? await Task.sleep(
+                nanoseconds: UInt64(
+                    (reduceMotion
+                     ? BoardIntroBanner.Tunables.reducedDisplayDuration
+                     : BoardIntroBanner.Tunables.displayDuration) * 1_000_000_000
+                )
+            )
+            guard !Task.isCancelled else { return }
+            withAnimation(
+                reduceMotion
+                    ? .easeIn(duration: BoardIntroBanner.Tunables.reducedOutDuration)
+                    : .easeInOut(duration: BoardIntroBanner.Tunables.outAnimationDuration)
+            ) {
+                showBoardIntroBanner = false
+            }
+        }
     }
 
     // MARK: - Shared view helpers
@@ -961,6 +1042,79 @@ private struct FloatingScorePop: View {
                     onFinish()
                 }
             }
+    }
+}
+
+private struct BoardIntroBanner: View {
+    enum Tunables {
+        static let displayDuration: TimeInterval = 0.9
+        static let reducedDisplayDuration: TimeInterval = 0.6
+        static let inAnimationDuration: TimeInterval = 0.28
+        static let outAnimationDuration: TimeInterval = 0.2
+        static let reducedInDuration: TimeInterval = 0.12
+        static let reducedOutDuration: TimeInterval = 0.1
+        static let topInset: CGFloat = 12
+    }
+
+    let currentAct: Int
+    let boardIndex: Int
+    let templateDisplayName: String
+    let hasStones: Bool
+    let isBoss: Bool
+
+    private var badges: [String] {
+        var items: [String] = ["FREE PICK"]
+        if hasStones { items.append("STONES") }
+        if isBoss { items.append("BOSS") }
+        return items
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text("ACT \(currentAct) · BOARD \(boardIndex)")
+                .font(.parchmentRounded(size: 12, weight: .bold))
+                .tracking(1.2)
+                .foregroundStyle(ParchmentTheme.Palette.slate)
+
+            Text(templateDisplayName)
+                .font(.parchmentRounded(size: 26, weight: .heavy))
+                .foregroundStyle(ParchmentTheme.Palette.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+
+            if !badges.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(badges, id: \.self) { badge in
+                        Text(badge)
+                            .font(.parchmentRounded(size: 10, weight: .heavy))
+                            .tracking(0.7)
+                            .foregroundStyle(ParchmentTheme.Palette.ink)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(ParchmentTheme.Palette.white.opacity(0.9))
+                                    .overlay(
+                                        Capsule(style: .continuous)
+                                            .stroke(ParchmentTheme.Palette.ink.opacity(0.3), lineWidth: 1)
+                                    )
+                            )
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(ParchmentTheme.Palette.paperBase.opacity(0.95))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(ParchmentTheme.Palette.ink.opacity(0.36), lineWidth: 1.6)
+                )
+        )
+        .shadow(color: ParchmentTheme.Palette.ink.opacity(0.16), radius: 8, x: 0, y: 4)
+        .padding(.horizontal, 20)
     }
 }
 

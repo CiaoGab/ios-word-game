@@ -71,6 +71,7 @@ enum Gravity {
     ) -> (tiles: [Tile?], spawns: [SpawnMove]) {
         var filled = tiles
         var spawns: [SpawnMove] = []
+        let empties = Set(emptyIndices)
 
         // Seed existing letter counts from tiles already on the board so spawned
         // tiles respect both per-board rare-letter caps and the hard vowel cap.
@@ -81,16 +82,41 @@ enum Gravity {
         }
 
         for col in 0..<cols {
-            let columnEmpties = emptyIndices
-                .filter { ($0 % cols) == col }
-                .sorted { ($0 / cols) < ($1 / cols) }
+            var row = rows - 1
+            while row >= 0 {
+                let index = row * cols + col
+                if !template.isPlayable(index) || template.isStone(index) {
+                    row -= 1
+                    continue
+                }
 
-            for (position, index) in columnEmpties.enumerated() {
-                guard template.isPlayable(index), !template.isStone(index) else { continue }
-                let tile = bag.nextTile(respecting: LetterBag.rareCaps, existingCounts: &existingCounts)
-                filled[index] = tile
-                let offset = columnEmpties.count - position
-                spawns.append(SpawnMove(tile: tile, toIndex: index, spawnRowOffset: max(1, offset)))
+                let segmentEnd = row
+                while row >= 0 {
+                    let probeIndex = row * cols + col
+                    if !template.isPlayable(probeIndex) || template.isStone(probeIndex) {
+                        break
+                    }
+                    row -= 1
+                }
+                let segmentStart = row + 1
+                var segmentEmpties: [Int] = []
+                for segmentRow in segmentStart...segmentEnd {
+                    let segmentIndex = segmentRow * cols + col
+                    guard empties.contains(segmentIndex) else { continue }
+                    guard template.isPlayable(segmentIndex), !template.isStone(segmentIndex) else { continue }
+                    segmentEmpties.append(segmentIndex)
+                }
+
+                for (position, segmentIndex) in segmentEmpties.enumerated() {
+                    let tile = bag.nextTile(respecting: LetterBag.rareCaps, existingCounts: &existingCounts)
+                    filled[segmentIndex] = tile
+                    let offset = segmentEmpties.count - position
+                    spawns.append(SpawnMove(tile: tile, toIndex: segmentIndex, spawnRowOffset: max(1, offset)))
+                }
+
+                if row >= 0 {
+                    row -= 1
+                }
             }
         }
 

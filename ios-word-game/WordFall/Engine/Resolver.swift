@@ -4,7 +4,6 @@ enum SubmissionRejectionReason: String {
     case invalidLength
     case outOfBounds
     case reusedTile
-    case nonAdjacent
     case emptyTile
     case notInDictionary
 }
@@ -25,8 +24,8 @@ struct ResolverResult {
 }
 
 enum Resolver {
-    static let minWordLen = 3
-    static let maxWordLen = 6
+    static let minWordLen = 4
+    static let maxWordLen = 8
     static let targetLocks = GameState.defaultTargetLocks
 
     static let hardLockLetters: Set<Character> = ["Q", "Z", "X", "J", "K", "V", "W"]
@@ -156,7 +155,6 @@ enum Resolver {
         let ink = Scoring.inkPoints(letterSum: letterSum, length: acceptedWord.count, isCascade: false)
         newState.score += points
         newState.inkPoints += ink
-        newState.moves = max(0, newState.moves - 1)
         newState.totalLocksBroken += locksBrokenThisMove
 
         for index in clearIndices {
@@ -298,20 +296,6 @@ enum Resolver {
         return tiles
     }
 
-    private static func pathIsAdjacent(_ path: [Int], gridSize: Int, mode: AdjacencyMode) -> Bool {
-        guard path.count >= 2 else { return true }
-
-        for idx in 1..<path.count {
-            let a = path[idx - 1]
-            let b = path[idx]
-            if !neighbors(of: a, gridSize: gridSize, mode: mode).contains(b) {
-                return false
-            }
-        }
-
-        return true
-    }
-
     private static func validatePath(_ path: [Int], template: BoardTemplate) -> SubmissionRejectionReason? {
         guard (minWordLen...maxWordLen).contains(path.count) else {
             return .invalidLength
@@ -324,10 +308,6 @@ enum Resolver {
 
         guard Set(path).count == path.count else {
             return .reusedTile
-        }
-
-        guard pathIsAdjacent(path, gridSize: template.gridSize, mode: template.adjacency) else {
-            return .nonAdjacent
         }
 
         return nil

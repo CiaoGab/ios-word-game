@@ -1,253 +1,262 @@
 import SwiftUI
 
 struct RunSummaryView: View {
-    let boardReached: Int
-    let wonRun: Bool
-    let milestoneTracker: MilestoneTracker
-    let onDismiss: () -> Void
+    let snapshot: RunSummarySnapshot
+    let onBackToMenu: () -> Void
+    let onPlayAgain: () -> Void
+
+    @State private var shareErrorMessage: String?
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.55)
+            ParchmentTheme.Roguelike.Palette.backdrop
                 .ignoresSafeArea()
 
-            ScrollView {
-                VStack(spacing: ParchmentTheme.Spacing.lg) {
-                    titleSection
-                    summaryStatsSection
-                    milestonesSection
-                    if !milestoneTracker.justUnlocked.isEmpty {
-                        newUnlocksSection
-                    }
-                    dismissButton
-                }
-                .padding(ParchmentTheme.Spacing.xl)
+            summaryCard
+                .padding(.horizontal, 20)
+                .padding(.vertical, 24)
+        }
+        .alert("Share Run", isPresented: Binding(
+            get: { shareErrorMessage != nil },
+            set: { if !$0 { shareErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(shareErrorMessage ?? "")
+        }
+    }
+
+    private var summaryCard: some View {
+        VStack(spacing: 20) {
+            headerSection
+            topStats
+            groupedStats
+            buttonsSection
+        }
+        .padding(24)
+        .frame(maxWidth: 520)
+        .background(
+            RoundedRectangle(
+                cornerRadius: ParchmentTheme.Roguelike.Radius.modalCard,
+                style: .continuous
+            )
+            .fill(ParchmentTheme.Roguelike.Palette.cardBackground)
+        )
+        .shadow(
+            color: ParchmentTheme.Roguelike.Shadow.modal.color,
+            radius: ParchmentTheme.Roguelike.Shadow.modal.radius,
+            x: ParchmentTheme.Roguelike.Shadow.modal.x,
+            y: ParchmentTheme.Roguelike.Shadow.modal.y
+        )
+    }
+
+    private var headerSection: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("RUN SUMMARY")
+                    .font(.system(size: 34, weight: .black, design: .rounded))
+                    .foregroundStyle(ParchmentTheme.Roguelike.Palette.goldAccent)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+
+                Text(snapshot.wonRun ? "Act 3 Complete" : "Run Ended")
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .foregroundStyle(ParchmentTheme.Roguelike.Palette.textSecondary)
             }
-            .background(
-                RoundedRectangle(cornerRadius: ParchmentOverlayStyle.Radius.panel, style: .continuous)
-                    .fill(ParchmentTheme.Palette.paperBase)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: ParchmentOverlayStyle.Radius.panel, style: .continuous)
-                            .stroke(ParchmentTheme.Palette.ink.opacity(0.88), lineWidth: ParchmentOverlayStyle.Stroke.panel)
+
+            Spacer(minLength: 0)
+
+            Button(action: onBackToMenu) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(ParchmentTheme.Roguelike.Palette.textPrimary)
+                    .frame(width: 34, height: 34)
+                    .background(
+                        Circle()
+                            .fill(ParchmentTheme.Roguelike.Palette.tileBackground)
                     )
-            )
-            .clipShape(RoundedRectangle(cornerRadius: ParchmentOverlayStyle.Radius.panel, style: .continuous))
-            .shadow(
-                color: ParchmentTheme.Palette.ink.opacity(0.18),
-                radius: ParchmentOverlayStyle.Tunables.panelShadowRadius,
-                x: 0,
-                y: ParchmentOverlayStyle.Tunables.panelShadowY
-            )
-            .padding(.horizontal, ParchmentTheme.Spacing.lg)
-            .padding(.vertical, 48)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close summary")
         }
     }
 
-    // MARK: - Sections
-
-    private var titleSection: some View {
-        VStack(spacing: ParchmentTheme.Spacing.xs) {
-            Text(wonRun ? "Nice Run!" : "Run Ended")
-                .font(.parchmentRounded(size: 34, weight: .heavy))
-                .foregroundStyle(wonRun
-                    ? ParchmentTheme.Palette.objectiveGreenText
-                    : ParchmentTheme.Palette.footerRed)
-
-            Text(subtitle)
-                .font(.parchmentRounded(size: 15, weight: .bold))
-                .foregroundStyle(ParchmentTheme.Palette.slate)
-        }
-    }
-
-    private var subtitle: String {
-        if wonRun {
-            return "You cleared all \(RunState.Tunables.totalBoards) boards!"
-        }
-        return "Board \(boardReached)/\(RunState.Tunables.totalBoards) reached."
-    }
-
-    private var summaryStatsSection: some View {
-        HStack(spacing: ParchmentTheme.Spacing.sm) {
-            summaryStatCard(
-                label: "Board Reached",
-                value: "\(boardReached)/\(RunState.Tunables.totalBoards)"
+    private var topStats: some View {
+        HStack(spacing: 12) {
+            statTile(
+                label: "TOTAL SCORE",
+                value: "\(snapshot.totalScore)",
+                valueColor: ParchmentTheme.Roguelike.Palette.goldAccent
             )
-            summaryStatCard(
-                label: "Locks Broken",
-                value: "\(milestoneTracker.counters.totalLocksBroken)"
-            )
-            summaryStatCard(
-                label: "Perks Unlocked",
-                value: "\(milestoneTracker.unlockedPerks.count)"
+            statTile(
+                label: "BOARDS CLEARED",
+                value: snapshot.boardsProgressText,
+                valueColor: ParchmentTheme.Roguelike.Palette.textPrimary
             )
         }
     }
 
-    private func summaryStatCard(label: String, value: String) -> some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(.parchmentRounded(size: 20, weight: .heavy).monospacedDigit())
-                .foregroundStyle(ParchmentTheme.Palette.ink)
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-
+    private func statTile(label: String, value: String, valueColor: Color) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
             Text(label)
-                .font(.parchmentRounded(size: 10, weight: .bold))
-                .textCase(.uppercase)
-                .tracking(0.8)
-                .foregroundStyle(ParchmentTheme.Palette.slate)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .tracking(1)
+                .foregroundStyle(ParchmentTheme.Roguelike.Palette.textSecondary)
+
+            Text(value)
+                .font(.system(size: 34, weight: .black, design: .rounded).monospacedDigit())
+                .foregroundStyle(valueColor)
                 .lineLimit(1)
-                .minimumScaleFactor(0.72)
+                .minimumScaleFactor(0.55)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, minHeight: 116, alignment: .leading)
+        .padding(16)
         .background(
-            RoundedRectangle(cornerRadius: ParchmentOverlayStyle.Radius.stat, style: .continuous)
-                .fill(ParchmentTheme.Palette.white)
+            RoundedRectangle(cornerRadius: ParchmentTheme.Roguelike.Radius.tile, style: .continuous)
+                .fill(ParchmentTheme.Roguelike.Palette.tileBackground)
                 .overlay(
-                    RoundedRectangle(cornerRadius: ParchmentOverlayStyle.Radius.stat, style: .continuous)
-                        .stroke(ParchmentTheme.Palette.ink.opacity(0.22), lineWidth: 2)
+                    RoundedRectangle(cornerRadius: ParchmentTheme.Roguelike.Radius.tile, style: .continuous)
+                        .stroke(ParchmentTheme.Roguelike.Palette.tileStroke, lineWidth: 1)
                 )
         )
-        .shadow(color: ParchmentTheme.Palette.ink.opacity(0.08), radius: 4, x: 0, y: 2)
-    }
-
-    private var milestonesSection: some View {
-        VStack(alignment: .leading, spacing: ParchmentTheme.Spacing.sm) {
-            Text("Key Milestones")
-                .font(.parchmentRounded(size: 16, weight: .heavy))
-                .foregroundStyle(ParchmentTheme.Palette.ink)
-
-            ForEach(MilestoneID.allCases, id: \.self) { milestoneID in
-                milestoneRow(milestoneID)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(ParchmentTheme.Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: ParchmentOverlayStyle.Radius.stat, style: .continuous)
-                .fill(ParchmentTheme.Palette.white.opacity(0.95))
-                .overlay(
-                    RoundedRectangle(cornerRadius: ParchmentOverlayStyle.Radius.stat, style: .continuous)
-                        .stroke(ParchmentTheme.Palette.ink.opacity(0.2), lineWidth: 2)
-                )
+        .shadow(
+            color: ParchmentTheme.Roguelike.Shadow.tile.color,
+            radius: ParchmentTheme.Roguelike.Shadow.tile.radius,
+            x: ParchmentTheme.Roguelike.Shadow.tile.x,
+            y: ParchmentTheme.Roguelike.Shadow.tile.y
         )
     }
 
-    private var newUnlocksSection: some View {
-        VStack(alignment: .leading, spacing: ParchmentTheme.Spacing.sm) {
-            Text("New Unlocks")
-                .font(.parchmentRounded(size: 17, weight: .heavy))
-                .foregroundStyle(ParchmentTheme.Palette.footerYellowStroke)
-
-            ForEach(milestoneTracker.justUnlocked, id: \.self) { perkID in
-                HStack(spacing: ParchmentTheme.Spacing.sm) {
-                    Image(systemName: "star.fill")
-                        .foregroundStyle(ParchmentTheme.Palette.footerYellowStroke)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(perkID.definition.name)
-                            .font(.parchmentRounded(size: 16, weight: .heavy))
-                            .foregroundStyle(ParchmentTheme.Palette.ink)
-                        Text(perkID.definition.description)
-                            .font(.parchmentRounded(size: 13, weight: .bold))
-                            .foregroundStyle(ParchmentTheme.Palette.slate)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(ParchmentTheme.Palette.white.opacity(0.92))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(ParchmentTheme.Palette.footerYellowStroke.opacity(0.35), lineWidth: 1.5)
-                        )
-                )
-            }
+    private var groupedStats: some View {
+        VStack(spacing: 0) {
+            groupedRow(
+                icon: "lock.open.fill",
+                title: "Locks Broken",
+                value: "\(snapshot.locksBroken)",
+                valueColor: ParchmentTheme.Roguelike.Palette.textPrimary
+            )
+            Divider().overlay(ParchmentTheme.Roguelike.Palette.tileStroke)
+            groupedRow(
+                icon: "text.badge.checkmark",
+                title: "Words Built",
+                value: "\(snapshot.wordsBuilt)",
+                valueColor: ParchmentTheme.Roguelike.Palette.textPrimary
+            )
+            Divider().overlay(ParchmentTheme.Roguelike.Palette.tileStroke)
+            groupedRow(
+                icon: "star.fill",
+                title: "Best Word",
+                value: bestWordText,
+                valueColor: ParchmentTheme.Roguelike.Palette.goldAccent
+            )
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(ParchmentTheme.Spacing.md)
         .background(
-            RoundedRectangle(cornerRadius: ParchmentOverlayStyle.Radius.stat, style: .continuous)
-                .fill(ParchmentTheme.Palette.levelYellow.opacity(0.58))
+            RoundedRectangle(cornerRadius: ParchmentTheme.Roguelike.Radius.rowCard, style: .continuous)
+                .fill(Color.white)
                 .overlay(
-                    RoundedRectangle(cornerRadius: ParchmentOverlayStyle.Radius.stat, style: .continuous)
-                        .stroke(ParchmentTheme.Palette.footerYellowStroke, lineWidth: 2)
+                    RoundedRectangle(cornerRadius: ParchmentTheme.Roguelike.Radius.rowCard, style: .continuous)
+                        .stroke(ParchmentTheme.Roguelike.Palette.tileStroke, lineWidth: 1)
                 )
         )
-        .shadow(color: ParchmentTheme.Palette.ink.opacity(0.08), radius: 4, x: 0, y: 2)
     }
 
-    private var dismissButton: some View {
-        Button(action: onDismiss) {
-            Text("Back to Menu")
-                .font(.parchmentRounded(size: 18, weight: .heavy))
-                .foregroundStyle(.white)
+    private func groupedRow(icon: String, title: String, value: String, valueColor: Color) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(ParchmentTheme.Roguelike.Palette.textSecondary)
+                .frame(width: 22)
+
+            Text(title)
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .foregroundStyle(ParchmentTheme.Roguelike.Palette.textSecondary)
+
+            Spacer(minLength: 8)
+
+            Text(value)
+                .font(.system(size: 17, weight: .heavy, design: .rounded).monospacedDigit())
+                .foregroundStyle(valueColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+
+    private var buttonsSection: some View {
+        VStack(spacing: 10) {
+            actionButton(
+                title: "Back to Menu",
+                background: ParchmentTheme.Roguelike.Palette.goldAccent,
+                foreground: .white,
+                action: onBackToMenu
+            )
+            actionButton(
+                title: "Play Again",
+                background: ParchmentTheme.Roguelike.Palette.tileBackground,
+                foreground: ParchmentTheme.Roguelike.Palette.textPrimary,
+                action: onPlayAgain
+            )
+            actionButton(
+                title: "Share Run",
+                background: ParchmentTheme.Roguelike.Palette.darkButton,
+                foreground: ParchmentTheme.Roguelike.Palette.darkButtonText,
+                action: shareRun
+            )
+        }
+    }
+
+    private func actionButton(
+        title: String,
+        background: Color,
+        foreground: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 18, weight: .heavy, design: .rounded))
+                .foregroundStyle(foreground)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 18)
+                .padding(.vertical, 16)
                 .background(
-                    RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button, style: .continuous)
-                        .fill(ParchmentTheme.Palette.objectiveGreen)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button, style: .continuous)
-                                .stroke(ParchmentTheme.Palette.objectiveGreenText, lineWidth: 3)
-                        )
+                    RoundedRectangle(cornerRadius: ParchmentTheme.Roguelike.Radius.button, style: .continuous)
+                        .fill(background)
                 )
         }
-        .buttonStyle(ParchmentPressStyle())
+        .buttonStyle(.plain)
     }
 
-    // MARK: - Milestone row
+    private var bestWordText: String {
+        guard !snapshot.bestWord.isEmpty else { return "—" }
+        return "\(snapshot.bestWord.uppercased()) (\(snapshot.bestWordScore))"
+    }
 
-    private func milestoneRow(_ milestoneID: MilestoneID) -> some View {
-        let milestone = milestoneID.definition
-        let (current, threshold) = milestoneTracker.milestoneProgress(for: milestoneID)
-        let progress = min(1.0, Double(current) / Double(threshold))
-        let unlocked = milestoneTracker.unlockedPerks.contains(milestone.unlocksPerkID)
-
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(milestone.description)
-                    .font(.parchmentRounded(size: 13, weight: .bold))
-                    .foregroundStyle(ParchmentTheme.Palette.slate)
-                Spacer()
-                Text(unlocked ? "✓ Unlocked" : "\(current)/\(threshold)")
-                    .font(.parchmentRounded(size: 12, weight: .bold))
-                    .foregroundStyle(unlocked
-                        ? ParchmentTheme.Palette.objectiveGreenText
-                        : ParchmentTheme.Palette.ink)
-            }
-
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(ParchmentTheme.Palette.paperDust)
-                        .frame(height: 9)
-                    Capsule()
-                        .fill(unlocked
-                            ? ParchmentTheme.Palette.objectiveGreen
-                            : ParchmentTheme.Palette.footerBlue)
-                        .frame(width: geo.size.width * CGFloat(progress), height: 9)
-                }
-            }
-            .frame(height: 9)
+    private func shareRun() {
+        guard let image = ShareCardImageRenderer.makeImage(snapshot: snapshot) else {
+            shareErrorMessage = "Could not generate share card image."
+            return
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(ParchmentTheme.Palette.paperBase.opacity(0.65))
-        )
+        let presented = ShareSheetPresenter.present(items: [image])
+        if !presented {
+            shareErrorMessage = "Could not present share sheet."
+        }
     }
 }
 
 #Preview {
     RunSummaryView(
-        boardReached: 5,
-        wonRun: false,
-        milestoneTracker: MilestoneTracker(),
-        onDismiss: {}
+        snapshot: RunSummarySnapshot(
+            wonRun: false,
+            totalScore: 2730,
+            boardsCleared: 7,
+            totalBoards: 15,
+            boardReached: 8,
+            locksBroken: 64,
+            wordsBuilt: 121,
+            bestWord: "REARRANGE",
+            bestWordScore: 450
+        ),
+        onBackToMenu: {},
+        onPlayAgain: {}
     )
 }

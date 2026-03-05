@@ -57,9 +57,17 @@ enum TestBuilders {
             normalizedTiles = Array(normalizedTiles.prefix(boardCount))
         }
 
+        let templateSize = max(rows, cols)
+        let boardTemplate = BoardTemplate.full(
+            gridSize: templateSize,
+            id: "test_\(rows)x\(cols)",
+            name: "Test \(rows)x\(cols)"
+        )
+
         return GameState(
             rows: rows,
             cols: cols,
+            boardTemplate: boardTemplate,
             tiles: normalizedTiles,
             score: score,
             moves: moves,

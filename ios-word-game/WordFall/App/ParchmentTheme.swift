@@ -2,6 +2,32 @@ import SwiftUI
 import UIKit
 
 enum ParchmentTheme {
+    enum Roguelike {
+        enum Palette {
+            static let goldAccent = Color(hex: 0xC79A3B)
+            static let cardBackground = Color(hex: 0xF7F7F5)
+            static let tileBackground = Color(hex: 0xECECE8)
+            static let tileStroke = Color(hex: 0xDADAD3)
+            static let textPrimary = Color(hex: 0x1F2329)
+            static let textSecondary = Color(hex: 0x6B7280)
+            static let darkButton = Color(hex: 0x1F2329)
+            static let darkButtonText = Color(hex: 0xF3F4F6)
+            static let backdrop = Color.black.opacity(0.45)
+        }
+
+        enum Radius {
+            static let modalCard: CGFloat = 32
+            static let tile: CGFloat = 20
+            static let rowCard: CGFloat = 22
+            static let button: CGFloat = 22
+        }
+
+        enum Shadow {
+            static let modal = (color: Color.black.opacity(0.16), radius: CGFloat(24), x: CGFloat(0), y: CGFloat(14))
+            static let tile = (color: Color.black.opacity(0.08), radius: CGFloat(8), x: CGFloat(0), y: CGFloat(4))
+        }
+    }
+
     enum Palette {
         static let paperBase = Color(hex: 0xFDF6E3)
         static let paperDust = Color(hex: 0xE6DBB9)

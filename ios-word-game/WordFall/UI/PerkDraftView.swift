@@ -51,7 +51,7 @@ struct PerkDraftView: View {
     }
 
     private func perkCard(_ perk: Perk) -> some View {
-        let rarity = rarity(for: perk.id)
+        let rarity = perk.rarity
         let rarityColors = rarity.palette
         let isSelected = selectedPerkID == perk.id
         let shouldDim = isProcessingSelection && !isSelected
@@ -90,14 +90,6 @@ struct PerkDraftView: View {
                     .foregroundStyle(ParchmentTheme.Palette.slate)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 2)
-
-                if let tradeoff = perk.tradeoff {
-                    Text("Tradeoff: \(tradeoff)")
-                        .font(.parchmentRounded(size: 12, weight: .bold))
-                        .foregroundStyle(ParchmentTheme.Palette.footerRedStroke)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 2)
-                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, ParchmentTheme.Spacing.lg)
@@ -162,23 +154,9 @@ struct PerkDraftView: View {
         }
     }
 
-    private func rarity(for perkID: PerkID) -> PerkRarity {
-        switch perkID {
-        case .freeHint, .freeUndo, .vowelBloom:
-            return .common
-        case .freshSpark, .straightShooter, .consonantCrunch, .tightGloves, .lockSplash:
-            return .uncommon
-        case .lockRefund, .longBreaker, .rareRelief, .bigGame, .vowelBloomPlus:
-            return .rare
-        }
-    }
 }
 
-private enum PerkRarity: String {
-    case common = "COMMON"
-    case uncommon = "UNCOMMON"
-    case rare = "RARE"
-
+private extension ModifierRarity {
     var palette: (fill: Color, stroke: Color, text: Color) {
         switch self {
         case .common:
@@ -198,6 +176,12 @@ private enum PerkRarity: String {
                 fill: ParchmentTheme.Palette.levelYellow.opacity(0.72),
                 stroke: ParchmentTheme.Palette.footerYellowStroke.opacity(0.85),
                 text: ParchmentTheme.Palette.footerYellowStroke
+            )
+        case .epic:
+            return (
+                fill: ParchmentTheme.Palette.footerPurple.opacity(0.24),
+                stroke: ParchmentTheme.Palette.footerPurpleStroke.opacity(0.9),
+                text: ParchmentTheme.Palette.footerPurpleStroke
             )
         }
     }
