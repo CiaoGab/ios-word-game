@@ -22,11 +22,14 @@ struct WordPillTiles: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.62)
         } else {
-            HStack(spacing: WordFeedbackStyle.MiniTile.spacing) {
-                ForEach(Array(letters.enumerated()), id: \.offset) { index, letter in
-                    miniTile(letter: letter, meta: tileMeta?[safe: index])
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: WordFeedbackStyle.MiniTile.spacing) {
+                    ForEach(Array(letters.enumerated()), id: \.offset) { index, letter in
+                        miniTile(letter: letter, meta: tileMeta?[safe: index])
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

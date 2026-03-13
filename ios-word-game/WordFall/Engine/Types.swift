@@ -40,6 +40,11 @@ enum AdjacencyMode: Equatable {
     case hvAndDiagonals
 }
 
+enum BoardVisualStyle: Equatable {
+    case standard
+    case triplePoolsBalanced
+}
+
 struct BoardTemplate: Equatable {
     let id: String
     let name: String
@@ -47,6 +52,10 @@ struct BoardTemplate: Equatable {
     let adjacency: AdjacencyMode
     let mask: Set<Int>
     let stones: Set<Int>
+    let specialRule: ChallengeSpecialRule
+    let regions: [Int: Int]
+    let minimumVowelsPerRegion: Int
+    let visualStyle: BoardVisualStyle
 
     init(
         id: String,
@@ -54,7 +63,11 @@ struct BoardTemplate: Equatable {
         gridSize: Int,
         adjacency: AdjacencyMode = .hvOnly,
         mask: Set<Int>,
-        stones: Set<Int> = []
+        stones: Set<Int> = [],
+        specialRule: ChallengeSpecialRule = .none,
+        regions: [Int: Int] = [:],
+        minimumVowelsPerRegion: Int = 0,
+        visualStyle: BoardVisualStyle = .standard
     ) {
         let cellCount = gridSize * gridSize
         let validMask = Set(mask.filter { $0 >= 0 && $0 < cellCount })
@@ -64,6 +77,14 @@ struct BoardTemplate: Equatable {
         self.adjacency = adjacency
         self.mask = validMask
         self.stones = Set(stones.filter { validMask.contains($0) })
+        self.specialRule = specialRule
+        self.regions = regions.reduce(into: [Int: Int]()) { result, entry in
+            if validMask.contains(entry.key) {
+                result[entry.key] = entry.value
+            }
+        }
+        self.minimumVowelsPerRegion = max(0, minimumVowelsPerRegion)
+        self.visualStyle = visualStyle
     }
 
     func isPlayable(_ index: Int) -> Bool {
@@ -81,12 +102,24 @@ struct BoardTemplate: Equatable {
     var rows: Int { gridSize }
     var cols: Int { gridSize }
 
+    func regionID(for index: Int) -> Int? {
+        regions[index]
+    }
+
+    var regionIDs: [Int] {
+        Array(Set(regions.values)).sorted()
+    }
+
     static func full(
         gridSize: Int,
         id: String,
         name: String,
         adjacency: AdjacencyMode = .hvOnly,
-        stones: Set<Int> = []
+        stones: Set<Int> = [],
+        specialRule: ChallengeSpecialRule = .none,
+        regions: [Int: Int] = [:],
+        minimumVowelsPerRegion: Int = 0,
+        visualStyle: BoardVisualStyle = .standard
     ) -> BoardTemplate {
         let count = gridSize * gridSize
         return BoardTemplate(
@@ -95,157 +128,100 @@ struct BoardTemplate: Equatable {
             gridSize: gridSize,
             adjacency: adjacency,
             mask: Set(0..<count),
-            stones: stones
+            stones: stones,
+            specialRule: specialRule,
+            regions: regions,
+            minimumVowelsPerRegion: minimumVowelsPerRegion,
+            visualStyle: visualStyle
         )
     }
 
-    static func template(for boardIndex: Int) -> BoardTemplate {
-        switch boardIndex {
-        case 1, 2, 3, 4:
-            return act1Standard7
-        case 5:
-            return boss5Hourglass
-        case 6:
-            return act2SixA
-        case 7:
-            return act2DiamondA
-        case 8:
-            return act2SixB
-        case 9:
-            return act2DiamondB
-        case 10:
-            return boss10Trident
-        case 11:
-            return act3SixA
-        case 12:
-            return act3DiamondA
-        case 13:
-            return act3SixB
-        case 14:
-            return act3DiamondB
-        case 15:
-            return boss15Fortress
-        default:
-            return act1Standard7
+    static func template(for roundIndex: Int) -> BoardTemplate {
+        let round = max(1, min(RunState.Tunables.totalRounds, roundIndex))
+
+        if let challenge = ChallengeRoundResolver.resolve(roundIndex: round) {
+            return challenge.boardTemplate
+        }
+
+        guard let family = RunState.boardFamily(for: round) else {
+            return standard6x6
+        }
+        return template(for: family)
+    }
+
+    static func template(for family: BoardFamily) -> BoardTemplate {
+        switch family {
+        case .standard6x6:
+            return standard6x6
+        case .lightStones6x6:
+            return lightStones6x6
+        case .denseStones6x6:
+            return denseStones6x6
+        case .diamond6x6:
+            return diamond6x6
+        case .hourglass6x6:
+            return hourglass6x6
+        case .splitLanes6x6:
+            return splitLanes6x6
         }
     }
 
-    private static let act1Standard7: BoardTemplate = .full(
-        gridSize: 7,
-        id: "act1_standard_7x7",
-        name: "Act 1 Standard"
-    )
-
-    private static let boss5Hourglass: BoardTemplate = BoardTemplate(
-        id: "boss5_hourglass",
-        name: "Boss 5 Hourglass",
-        gridSize: 7,
-        adjacency: .hvAndDiagonals,
-        mask: maskFromRows(7, rows: [
-            [1, 2, 3, 4, 5],
-            [0, 1, 2, 3, 4, 5, 6],
-            [1, 2, 3, 4, 5],
-            [2, 3, 4],
-            [1, 2, 3, 4, 5],
-            [0, 1, 2, 3, 4, 5, 6],
-            [1, 2, 3, 4, 5]
-        ])
-    )
-
-    private static let act2SixA: BoardTemplate = .full(
+    private static let standard6x6: BoardTemplate = .full(
         gridSize: 6,
-        id: "act2_six_a",
-        name: "Act 2 Six A",
+        id: "standard_6x6",
+        name: "Standard"
+    )
+
+    private static let lightStones6x6: BoardTemplate = .full(
+        gridSize: 6,
+        id: "light_stones_6x6",
+        name: "Light Stones",
         stones: indices(6, coords: [(2, 2), (3, 3)])
     )
 
-    private static let act2DiamondA: BoardTemplate = BoardTemplate(
-        id: "act2_diamond_a",
-        name: "Act 2 Diamond A",
-        gridSize: 7,
-        adjacency: .hvAndDiagonals,
-        mask: diamondMask(7, radius: 4),
-        stones: indices(7, coords: [(2, 3)])
-    )
-
-    private static let act2SixB: BoardTemplate = .full(
+    private static let denseStones6x6: BoardTemplate = .full(
         gridSize: 6,
-        id: "act2_six_b",
-        name: "Act 2 Six B",
+        id: "dense_stones_6x6",
+        name: "Dense Stones",
         stones: indices(6, coords: [(1, 3), (3, 1), (4, 4)])
     )
 
-    private static let act2DiamondB: BoardTemplate = BoardTemplate(
-        id: "act2_diamond_b",
-        name: "Act 2 Diamond B",
-        gridSize: 7,
-        adjacency: .hvAndDiagonals,
-        mask: diamondMask(7, radius: 5),
-        stones: indices(7, coords: [(3, 1), (3, 5)])
-    )
-
-    private static let boss10Trident: BoardTemplate = BoardTemplate(
-        id: "boss10_trident",
-        name: "Boss 10 Trident",
-        gridSize: 7,
-        mask: maskFromRows(7, rows: [
-            [1, 2, 3, 4, 5],
-            [1, 3, 5],
-            [1, 3, 5],
-            [0, 1, 2, 3, 4, 5, 6],
-            [2, 3, 4],
-            [2, 4],
-            [2, 4]
-        ]),
-        stones: indices(7, coords: [(1, 3), (5, 4)])
-    )
-
-    private static let act3SixA: BoardTemplate = .full(
+    private static let diamond6x6: BoardTemplate = BoardTemplate(
+        id: "diamond_6x6",
+        name: "Diamond",
         gridSize: 6,
-        id: "act3_six_a",
-        name: "Act 3 Six A",
-        stones: indices(6, coords: [(1, 1), (1, 4), (3, 2), (4, 4)])
-    )
-
-    private static let act3DiamondA: BoardTemplate = BoardTemplate(
-        id: "act3_diamond_a",
-        name: "Act 3 Diamond A",
-        gridSize: 7,
         adjacency: .hvAndDiagonals,
-        mask: diamondMask(7, radius: 4),
-        stones: indices(7, coords: [(2, 2), (2, 4), (4, 2), (4, 4)])
-    )
-
-    private static let act3SixB: BoardTemplate = .full(
-        gridSize: 6,
-        id: "act3_six_b",
-        name: "Act 3 Six B",
-        stones: indices(6, coords: [(0, 4), (2, 1), (2, 4), (4, 2), (5, 3)])
-    )
-
-    private static let act3DiamondB: BoardTemplate = BoardTemplate(
-        id: "act3_diamond_b",
-        name: "Act 3 Diamond B",
-        gridSize: 7,
-        adjacency: .hvAndDiagonals,
-        mask: diamondMask(7, radius: 5),
-        stones: indices(7, coords: [(1, 3), (3, 2), (3, 4), (5, 2), (5, 4)])
-    )
-
-    private static let boss15Fortress: BoardTemplate = BoardTemplate(
-        id: "boss15_fortress",
-        name: "Boss 15 Fortress",
-        gridSize: 7,
-        mask: maskFromRows(7, rows: [
-            [1, 2, 3, 4, 5],
-            [0, 1, 2, 3, 4, 5, 6],
-            [0, 2, 3, 4, 6],
-            [0, 2, 4, 6],
-            [0, 2, 3, 4, 6],
-            [0, 1, 2, 3, 4, 5, 6],
-            [1, 2, 3, 4, 5]
+        mask: maskFromRows(6, rows: [
+            [2, 3],
+            [1, 2, 3, 4],
+            [0, 1, 2, 3, 4, 5],
+            [0, 1, 2, 3, 4, 5],
+            [1, 2, 3, 4],
+            [2, 3]
         ]),
-        stones: indices(7, coords: [(2, 3), (4, 3)])
+        stones: indices(6, coords: [(1, 3)])
+    )
+
+    private static let hourglass6x6: BoardTemplate = BoardTemplate(
+        id: "hourglass_6x6",
+        name: "Hourglass",
+        gridSize: 6,
+        adjacency: .hvAndDiagonals,
+        mask: maskFromRows(6, rows: [
+            [1, 2, 3, 4],
+            [0, 1, 2, 3, 4, 5],
+            [1, 2, 3, 4],
+            [2, 3],
+            [1, 2, 3, 4],
+            [0, 1, 2, 3, 4, 5]
+        ])
+    )
+
+    private static let splitLanes6x6: BoardTemplate = BoardTemplate(
+        id: "split_lanes_6x6",
+        name: "Split Lanes",
+        gridSize: 6,
+        mask: maskFromRows(6, rows: Array(repeating: [0, 1, 2, 4, 5], count: 6))
     )
 
     private static func indices(_ size: Int, coords: [(Int, Int)]) -> Set<Int> {
@@ -292,8 +268,8 @@ struct GameState {
     var totalLocksBroken: Int
     var lockObjectiveTarget: Int
 
-    static let defaultRows = 7
-    static let defaultCols = 7
+    static let defaultRows = 6
+    static let defaultCols = 6
     static let defaultMoves = 20
     static let defaultTargetLocks = 6
 }

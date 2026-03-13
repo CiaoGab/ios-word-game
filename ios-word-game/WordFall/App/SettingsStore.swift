@@ -8,6 +8,7 @@ enum AppSettings {
         static let soundEnabled = "settings.soundEnabled"
         static let reduceMotion = "settings.reduceMotion"
         static let highContrast = "settings.highContrast"
+        static let debugStartRound = "settings.debugStartRound"
     }
 
     enum Defaults {
@@ -15,6 +16,7 @@ enum AppSettings {
         static let soundEnabled = true
         static let reduceMotion = false
         static let highContrast = false
+        static let debugStartRound = 1
     }
 
     private static let store = UserDefaults.standard
@@ -22,6 +24,11 @@ enum AppSettings {
     private static func boolValue(forKey key: String, fallback: Bool) -> Bool {
         guard store.object(forKey: key) != nil else { return fallback }
         return store.bool(forKey: key)
+    }
+
+    private static func intValue(forKey key: String, fallback: Int) -> Int {
+        guard store.object(forKey: key) != nil else { return fallback }
+        return store.integer(forKey: key)
     }
 
     static var hapticsEnabled: Bool {
@@ -38,6 +45,11 @@ enum AppSettings {
 
     static var highContrast: Bool {
         boolValue(forKey: Keys.highContrast, fallback: Defaults.highContrast)
+    }
+
+    static var debugStartRound: Int {
+        let stored = intValue(forKey: Keys.debugStartRound, fallback: Defaults.debugStartRound)
+        return min(max(stored, 1), RunState.Tunables.totalRounds)
     }
 }
 
@@ -59,6 +71,10 @@ final class SettingsStore: ObservableObject {
     }
 
     @AppStorage(AppSettings.Keys.highContrast) var highContrast: Bool = AppSettings.Defaults.highContrast {
+        didSet { notifySettingChanged() }
+    }
+
+    @AppStorage(AppSettings.Keys.debugStartRound) var debugStartRound: Int = AppSettings.Defaults.debugStartRound {
         didSet { notifySettingChanged() }
     }
 

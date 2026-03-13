@@ -166,7 +166,7 @@ extension ModifierID {
             return Modifier(
                 id: self,
                 name: "Glass Ledger",
-                description: "+30% base score on every word. Tradeoff: disables 5/6-letter move refunds.",
+                description: "+30% base score on every word. Tradeoff: disables built-in long-word move refunds.",
                 rarity: .rare,
                 tags: ["score_multiplier", "move_refund", "tradeoff"]
             )
@@ -206,7 +206,7 @@ extension ModifierID {
             return Modifier(
                 id: self,
                 name: "Boss Hunter",
-                description: "Boss boards: +2 moves and lock target -15%. Non-boss boards: -1 move.",
+                description: "Challenge rounds: +2 moves and lock target -15%. Non-challenge rounds: -1 move.",
                 rarity: .uncommon,
                 tags: ["boss", "moves", "lock_target", "tradeoff"]
             )
@@ -214,7 +214,7 @@ extension ModifierID {
             return Modifier(
                 id: self,
                 name: "Titan Tribute",
-                description: "Boss boards: +40% base score and +1 guaranteed extra reward. Non-boss words: -10% base score.",
+                description: "Challenge rounds: +40% base score and +1 guaranteed extra reward. Non-challenge words: -10% base score.",
                 rarity: .rare,
                 tags: ["boss", "score_multiplier", "rewards", "tradeoff"]
             )

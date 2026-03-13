@@ -9,6 +9,10 @@ struct LetterBag {
     /// Defaults to empty. Set to `["Q","Z","X","J","K"]` when rareRelief is active.
     var excludedLetters: Set<Character> = []
 
+    /// Relative multiplier applied to the gated rare-letter pools.
+    /// `1.05` means a 5% boost to both extreme and rare spawn rolls.
+    var rareSpawnRateMultiplier: Double = 1.0
+
     init(weights: [(Character, Int)] = Self.defaultWeights) {
         self.normalWeightedLetters = weights
             .filter { !Self.rareSet.contains($0.0) }
@@ -80,15 +84,23 @@ struct LetterBag {
     /// Falls through to a cheaper pool when the selected pool is empty (shouldn't
     /// happen in normal play, but guards against bad custom weight configs).
     private func drawRaw() -> Character {
+        let gate = Self.rarityGate(multiplier: rareSpawnRateMultiplier)
         let r = Double.random(in: 0..<1)
-        if r < Self.pExtreme {
+        if r < gate.extreme {
             return Self.extremeRares.randomElement()
                 ?? normalWeightedLetters.randomElement() ?? "E"
-        } else if r < Self.cutoffRare {
+        } else if r < gate.cutoffRare {
             return Self.rares.randomElement()
                 ?? normalWeightedLetters.randomElement() ?? "E"
         }
         return normalWeightedLetters.randomElement() ?? "E"
+    }
+
+    static func rarityGate(multiplier: Double) -> (extreme: Double, rareNet: Double, cutoffRare: Double) {
+        let clampedMultiplier = max(0, multiplier)
+        let extreme = min(1.0, pExtreme * clampedMultiplier)
+        let rareNet = min(max(0.0, 1.0 - extreme), pRareNet * clampedMultiplier)
+        return (extreme, rareNet, extreme + rareNet)
     }
 
     // MARK: – Debug
@@ -98,7 +110,7 @@ struct LetterBag {
     private static var _debugRareCount: Int = 0
     private static var _debugBoardHasExtreme: Bool = false
     private static var _debugBoardHasRare: Bool = false
-    private static let _debugBoardSize: Int = 49   // 7×7 proxy
+    private static let _debugBoardSize: Int = 36   // 6×6 (first-pass board size)
 
     private static func debugRecordDraw(_ letter: Character) {
         _debugDrawCount += 1

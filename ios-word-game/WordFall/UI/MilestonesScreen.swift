@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct MilestonesScreen: View {
-    let milestoneTracker: MilestoneTracker
+    let playerProfile: PlayerProfile
     let onBack: () -> Void
 
     var body: some View {
@@ -17,17 +17,17 @@ struct MilestonesScreen: View {
                             Image(systemName: "chevron.left")
                                 .font(.system(size: 16, weight: .bold))
                             Text("Menu")
-                                .font(.parchmentRounded(size: 15, weight: .heavy))
+                                .font(StitchTheme.Typography.body(size: 15, weight: .heavy))
                         }
-                        .foregroundStyle(ParchmentTheme.Palette.ink)
+                        .foregroundStyle(StitchTheme.Colors.inkPrimary)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 9)
                         .background(
                             Capsule(style: .continuous)
-                                .fill(ParchmentTheme.Palette.white)
+                                .fill(StitchTheme.Colors.surfaceCard)
                                 .overlay(
                                     Capsule(style: .continuous)
-                                        .stroke(ParchmentTheme.Palette.ink, lineWidth: ParchmentTheme.Stroke.hud)
+                                        .stroke(StitchTheme.Colors.strokeStandard, lineWidth: StitchTheme.Stroke.standard)
                                 )
                         )
                     }
@@ -36,33 +36,30 @@ struct MilestonesScreen: View {
                     Spacer()
 
                     Text("Milestones")
-                        .font(.parchmentRounded(size: 22, weight: .heavy))
-                        .foregroundStyle(ParchmentTheme.Palette.ink)
+                        .font(StitchTheme.Typography.title(size: 22))
+                        .foregroundStyle(StitchTheme.Colors.inkPrimary)
 
                     Spacer()
 
-                    // Invisible balance element matching the back button width
                     Color.clear
                         .frame(width: 80, height: 38)
                 }
-                .padding(.horizontal, ParchmentTheme.Spacing.lg)
-                .padding(.top, ParchmentTheme.Spacing.lg)
-                .padding(.bottom, ParchmentTheme.Spacing.md)
+                .padding(.horizontal, StitchTheme.Space._4)
+                .padding(.top, StitchTheme.Space._4)
+                .padding(.bottom, StitchTheme.Space._3)
 
-                // Stats row
                 statsRow
-                    .padding(.horizontal, ParchmentTheme.Spacing.lg)
-                    .padding(.bottom, ParchmentTheme.Spacing.md)
+                    .padding(.horizontal, StitchTheme.Space._4)
+                    .padding(.bottom, StitchTheme.Space._3)
 
-                // Milestone cards
                 ScrollView {
-                    VStack(spacing: ParchmentTheme.Spacing.md) {
-                        ForEach(MilestoneID.allCases, id: \.self) { milestoneID in
+                    VStack(spacing: StitchTheme.Space._3) {
+                        ForEach(LifetimeMilestoneID.allCases, id: \.self) { milestoneID in
                             milestoneCard(milestoneID)
                         }
                     }
-                    .padding(.horizontal, ParchmentTheme.Spacing.lg)
-                    .padding(.bottom, ParchmentTheme.Spacing.xl)
+                    .padding(.horizontal, StitchTheme.Space._4)
+                    .padding(.bottom, StitchTheme.Space._5)
                 }
             }
         }
@@ -71,119 +68,102 @@ struct MilestonesScreen: View {
     // MARK: - Stats row
 
     private var statsRow: some View {
-        HStack(spacing: ParchmentTheme.Spacing.sm) {
-            statPill(
-                label: "Best Round",
-                value: "\(milestoneTracker.counters.bestRoundReached)"
-            )
-            statPill(
-                label: "Runs",
-                value: "\(milestoneTracker.counters.runsCompleted)"
-            )
-            statPill(
-                label: "Locks Broken",
-                value: "\(milestoneTracker.counters.totalLocksBroken)"
-            )
+        HStack(spacing: StitchTheme.Space._2) {
+            statPill(label: "Best Round", value: "\(playerProfile.stats.highestRoundReached)")
+            statPill(label: "Words", value: "\(playerProfile.stats.totalWordsBuilt)")
+            statPill(label: "Locks Broken", value: "\(playerProfile.stats.totalLocksBroken)")
+            statPill(label: "Rare Words", value: "\(playerProfile.stats.totalRareLetterWords)")
         }
     }
 
     private func statPill(label: String, value: String) -> some View {
         VStack(spacing: 2) {
             Text(value)
-                .font(.parchmentRounded(size: 20, weight: .heavy).monospacedDigit())
-                .foregroundStyle(ParchmentTheme.Palette.ink)
+                .font(StitchTheme.Typography.body(size: 20, weight: .heavy).monospacedDigit())
+                .foregroundStyle(StitchTheme.Colors.inkPrimary)
             Text(label)
-                .font(.parchmentRounded(size: 10, weight: .bold))
+                .font(StitchTheme.Typography.labelCaps(size: 10))
                 .textCase(.uppercase)
                 .tracking(0.8)
-                .foregroundStyle(ParchmentTheme.Palette.slate)
+                .foregroundStyle(StitchTheme.Colors.inkSecondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(ParchmentTheme.Palette.white)
+            RoundedRectangle(cornerRadius: StitchTheme.Radii.sm, style: .continuous)
+                .fill(StitchTheme.Colors.surfaceCard)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(ParchmentTheme.Palette.ink.opacity(0.18), lineWidth: 1.5)
+                    RoundedRectangle(cornerRadius: StitchTheme.Radii.sm, style: .continuous)
+                        .stroke(StitchTheme.Colors.strokeSoft, lineWidth: StitchTheme.Stroke.hairline)
                 )
         )
     }
 
     // MARK: - Milestone card
 
-    private func milestoneCard(_ milestoneID: MilestoneID) -> some View {
-        let milestone = milestoneID.definition
-        let (current, threshold) = milestoneTracker.milestoneProgress(for: milestoneID)
+    private func milestoneCard(_ milestoneID: LifetimeMilestoneID) -> some View {
+        let milestone = milestoneID
+        let (current, threshold) = playerProfile.lifetimeMilestoneProgress(for: milestoneID)
         let progress = min(1.0, Double(current) / Double(threshold))
-        let unlocked = milestoneTracker.unlockedPerks.contains(milestone.unlocksPerkID)
-        let perk = milestone.unlocksPerkID.definition
+        let unlocked = playerProfile.unlockedLifetimeMilestones.contains(milestoneID)
+        let sh = StitchTheme.Shadow.card
 
-        return VStack(alignment: .leading, spacing: ParchmentTheme.Spacing.sm) {
-            HStack(alignment: .top, spacing: ParchmentTheme.Spacing.sm) {
+        return VStack(alignment: .leading, spacing: StitchTheme.Space._2) {
+            HStack(alignment: .top, spacing: StitchTheme.Space._2) {
                 Image(systemName: unlocked ? "star.fill" : "star")
                     .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(unlocked
-                        ? ParchmentTheme.Palette.footerYellow
-                        : ParchmentTheme.Palette.slate)
+                    .foregroundStyle(unlocked ? ParchmentTheme.Palette.footerYellow : StitchTheme.Colors.inkSecondary)
                     .frame(width: 24)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(milestone.description)
-                        .font(.parchmentRounded(size: 15, weight: .heavy))
-                        .foregroundStyle(ParchmentTheme.Palette.ink)
+                    Text(milestone.title)
+                        .font(StitchTheme.Typography.body(size: 15, weight: .heavy))
+                        .foregroundStyle(StitchTheme.Colors.inkPrimary)
 
-                    Text("Unlocks \(perk.name) — \(perk.description)")
-                        .font(.parchmentRounded(size: 12, weight: .bold))
-                        .foregroundStyle(ParchmentTheme.Palette.slate)
+                    Text(milestone.effectDescription)
+                        .font(StitchTheme.Typography.caption())
+                        .foregroundStyle(StitchTheme.Colors.inkSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer()
 
                 Text(unlocked ? "✓" : "\(current)/\(threshold)")
-                    .font(.parchmentRounded(size: 14, weight: .heavy).monospacedDigit())
-                    .foregroundStyle(unlocked
-                        ? ParchmentTheme.Palette.objectiveGreenText
-                        : ParchmentTheme.Palette.ink)
+                    .font(StitchTheme.Typography.caption(size: 14, weight: .heavy).monospacedDigit())
+                    .foregroundStyle(unlocked ? ParchmentTheme.Palette.objectiveGreenText : StitchTheme.Colors.inkPrimary)
             }
 
-            // Progress bar
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule()
-                        .fill(ParchmentTheme.Palette.paperDust)
+                        .fill(StitchTheme.Colors.surfaceCardAlt)
                         .frame(height: 10)
                     Capsule()
-                        .fill(unlocked
-                            ? ParchmentTheme.Palette.objectiveGreen
-                            : ParchmentTheme.Palette.footerBlue)
+                        .fill(unlocked ? ParchmentTheme.Palette.objectiveGreen : ParchmentTheme.Palette.footerBlue)
                         .frame(width: geo.size.width * CGFloat(progress), height: 10)
                 }
             }
             .frame(height: 10)
         }
-        .padding(ParchmentTheme.Spacing.lg)
+        .padding(StitchTheme.Space._4)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(ParchmentTheme.Palette.white)
+            RoundedRectangle(cornerRadius: StitchTheme.Radii.md, style: .continuous)
+                .fill(StitchTheme.Colors.surfaceCard)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    RoundedRectangle(cornerRadius: StitchTheme.Radii.md, style: .continuous)
                         .stroke(
-                            unlocked
-                                ? ParchmentTheme.Palette.objectiveGreen
-                                : ParchmentTheme.Palette.paperDust,
-                            lineWidth: 2
+                            unlocked ? ParchmentTheme.Palette.objectiveGreen : StitchTheme.Colors.strokeSoft,
+                            lineWidth: StitchTheme.Stroke.standard
                         )
                 )
         )
-        .shadow(color: ParchmentTheme.Palette.ink.opacity(0.07), radius: 4, x: 0, y: 2)
+        .shadow(color: sh.color.opacity(0.7), radius: sh.radius, x: sh.x, y: sh.y)
     }
 }
 
 #Preview {
     MilestonesScreen(
-        milestoneTracker: MilestoneTracker(),
+        playerProfile: PlayerProfile(),
         onBack: {}
     )
 }

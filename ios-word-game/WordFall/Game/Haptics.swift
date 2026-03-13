@@ -35,4 +35,10 @@ enum Haptics {
         guard AppSettings.hapticsEnabled else { return }
         notificationGenerator.notificationOccurred(.warning)
     }
+
+    /// Fire when one or more locks break on a valid submit.
+    static func lockBreak() {
+        guard AppSettings.hapticsEnabled else { return }
+        submitGenerator.impactOccurred(intensity: 0.95)
+    }
 }

@@ -3,63 +3,91 @@ import SpriteKit
 
 struct GameScreen: View {
     private enum BoardVisuals {
-        static let textureOpacity: Double = 0.15
+        static let fieldOpacity: Double = 0.08
+        static let dotOpacity: Double = 0.02
+    }
+
+    private enum GameChrome {
+        static let screenPadding: CGFloat = 14
+        static let sectionSpacing: CGFloat = 8   // 6x6 rebalance: reduced from 12 to give board more vertical space
+        static let panelSpacing: CGFloat = 8     // 6x6 rebalance: reduced from 10
+        static let boardHorizontalBleed: CGFloat = -6
     }
 
     let onQuitToMenu: () -> Void
+    let starterPerks: [StarterPerkID]
 
     @StateObject private var session: GameSessionController
-    @State private var showDebugHUD: Bool = false
     @State private var showPause: Bool = false
     @State private var wordPillShakeTrigger: CGFloat = 0
     @State private var scorePops: [ScorePop] = []
     @State private var showBoardIntroBanner: Bool = false
     @State private var boardIntroTask: Task<Void, Never>? = nil
+    @State private var submitBeat: SubmitBeat? = nil  // file-scope private type
 
     private struct ScorePop: Identifiable {
         let id: UUID = UUID()
         let text: String
     }
 
-    init(milestoneTracker: MilestoneTracker, onQuitToMenu: @escaping () -> Void) {
+
+
+    init(
+        milestoneTracker: MilestoneTracker,
+        playerProfile: PlayerProfile,
+        starterPerks: [StarterPerkID],
+        onQuitToMenu: @escaping () -> Void
+    ) {
         self.onQuitToMenu = onQuitToMenu
-        _session = StateObject(wrappedValue: GameSessionController(milestoneTracker: milestoneTracker))
+        self.starterPerks = starterPerks
+        _session = StateObject(
+            wrappedValue: GameSessionController(
+                milestoneTracker: milestoneTracker,
+                playerProfile: playerProfile
+            )
+        )
     }
 
     var body: some View {
         let reduceMotion = AppSettings.reduceMotion
 
         ZStack {
-            ParchmentBackdrop()
+            StitchTheme.BoardGame.canvas
                 .ignoresSafeArea()
 
-            VStack(spacing: 0) {
+            VStack(spacing: GameChrome.sectionSpacing) {
                 hud
 
                 boardSection
-                    .padding(.top, 8)           // HUD → board: slightly tighter
 
-                // board→pill: 14   pill→submit: 11   submit→powerups: 13
-                VStack(spacing: 0) {
+                VStack(spacing: GameChrome.panelSpacing) {
                     wordSelectionPill
-                        .padding(.bottom, 11)
                     submitRow
-                        .padding(.bottom, 13)
                     powerupBar
-                    #if DEBUG
-                    debugOverlay
-                    #endif
                 }
-                .padding(.top, 14)              // board → word pill
             }
-            .padding(.horizontal, ParchmentTheme.Spacing.lg)
-            .padding(.top, ParchmentTheme.Spacing.lg)
-            .padding(.bottom, 10)               // powerups → safe area
+            .padding(.horizontal, GameChrome.screenPadding)
+            .padding(.top, 12)
+            .padding(.bottom, GameChrome.screenPadding)
+
+            // Submit score beat (Balatro-style word score presentation)
+            if let beat = submitBeat {
+                VStack {
+                    Spacer()
+                    SubmitScoreBeatView(beat: beat, reduceMotion: reduceMotion) {
+                        submitBeat = nil
+                    }
+                    Spacer().frame(height: 225)
+                }
+                .zIndex(6)
+                .allowsHitTesting(false)
+                .padding(.horizontal, GameChrome.screenPadding + 20)
+            }
 
             // Modifier draft overlay (shown after each board win)
             if session.showPerkDraft {
                 PerkDraftView(
-                    boardIndex: session.runState?.boardIndex ?? 1,
+                    roundIndex: session.runState?.roundIndex ?? 1,
                     options: session.perkDraftOptions,
                     onSelect: { perkId in
                         session.advanceBoardAfterModifierSelection(perkId)
@@ -78,7 +106,7 @@ struct GameScreen: View {
                         onQuitToMenu()
                     },
                     onPlayAgain: {
-                        session.restartRun()
+                        session.restartRun(starterPerks: starterPerks)
                     }
                 )
                 .transition(.opacity.animation(.easeInOut(duration: 0.25)))
@@ -87,18 +115,18 @@ struct GameScreen: View {
 
             if session.showRoundClearStamp {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(ParchmentTheme.Palette.footerRed.opacity(0.92))
+                    RoundedRectangle(cornerRadius: StitchTheme.Radii.lg, style: .continuous)
+                        .fill(StitchTheme.Colors.accentGold)
                         .frame(width: 258, height: 110)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(ParchmentTheme.Palette.footerRedStroke, lineWidth: 6)
+                            RoundedRectangle(cornerRadius: StitchTheme.Radii.lg, style: .continuous)
+                                .stroke(StitchTheme.Colors.accentGoldStroke, lineWidth: StitchTheme.Stroke.bold)
                         )
                         .rotationEffect(.degrees(-8))
-                        .shadow(color: ParchmentTheme.Palette.ink.opacity(0.22), radius: 8, x: 0, y: 4)
+                        .shadow(color: StitchTheme.Colors.shadowColor.opacity(0.2), radius: 8, x: 0, y: 4)
 
-                    Text("BOARD CLEARED!")
-                        .font(.parchmentRounded(size: 30, weight: .heavy))
+                    Text("ROUND CLEARED!")
+                        .font(StitchTheme.Typography.title(size: 28))
                         .foregroundStyle(.white)
                         .minimumScaleFactor(0.8)
                         .lineLimit(1)
@@ -116,24 +144,34 @@ struct GameScreen: View {
                 .allowsHitTesting(false)
             }
 
+            // Round-cleared popup (interactive transition between rounds)
+            if let info = session.roundClearedInfo {
+                RoundClearedOverlay(
+                    info: info,
+                    onNext: { session.confirmRoundCleared() }
+                )
+                .transition(.opacity.animation(.easeInOut(duration: 0.2)))
+                .zIndex(11)
+            }
+
             // Powerup toast
             if let toast = session.powerupToast {
                 VStack {
                     Spacer()
                     Text(toast)
-                        .font(.parchmentRounded(size: 16, weight: .heavy))
+                        .font(StitchTheme.Typography.body(size: 16, weight: .heavy))
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, StitchTheme.Space._5)
+                        .padding(.vertical, StitchTheme.Space._3)
                         .background(
-                            Capsule(style: .continuous)
-                                .fill(ParchmentTheme.Palette.footerPurple)
+                            RoundedRectangle(cornerRadius: StitchTheme.Radii.md, style: .continuous)
+                                .fill(StitchTheme.Colors.inkPrimary)
                                 .overlay(
-                                    Capsule(style: .continuous)
-                                        .stroke(ParchmentTheme.Palette.footerPurpleStroke, lineWidth: 2)
+                                    RoundedRectangle(cornerRadius: StitchTheme.Radii.md, style: .continuous)
+                                        .stroke(StitchTheme.Colors.strokeStandard, lineWidth: StitchTheme.Stroke.standard)
                                 )
                         )
-                        .shadow(color: ParchmentTheme.Palette.ink.opacity(0.18), radius: 6, x: 0, y: 3)
+                        .shadow(color: StitchTheme.Colors.shadowColor.opacity(0.15), radius: 6, x: 0, y: 3)
                         .transition(.asymmetric(
                             insertion: .move(edge: .bottom).combined(with: .opacity),
                             removal: .opacity
@@ -150,13 +188,17 @@ struct GameScreen: View {
                 VStack {
                     Spacer().frame(height: 60)
                     Text("Tap a tile to place Wildcard")
-                        .font(.parchmentRounded(size: 14, weight: .bold))
+                        .font(StitchTheme.Typography.caption(size: 14))
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 9)
+                        .padding(.horizontal, StitchTheme.Space._4)
+                        .padding(.vertical, StitchTheme.Space._2)
                         .background(
-                            Capsule(style: .continuous)
-                                .fill(ParchmentTheme.Palette.footerPurple.opacity(0.92))
+                            RoundedRectangle(cornerRadius: StitchTheme.Radii.sm, style: .continuous)
+                                .fill(StitchTheme.Colors.accentGold)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: StitchTheme.Radii.sm, style: .continuous)
+                                        .stroke(StitchTheme.Colors.accentGoldStroke, lineWidth: StitchTheme.Stroke.hairline)
+                                )
                         )
                         .transition(.opacity.animation(.easeInOut(duration: 0.2)))
                     Spacer()
@@ -166,7 +208,7 @@ struct GameScreen: View {
             }
         }
         .onAppear {
-            session.startRun()
+            session.startRun(starterPerks: starterPerks)
         }
         .onDisappear {
             boardIntroTask?.cancel()
@@ -174,6 +216,8 @@ struct GameScreen: View {
         }
         .sheet(isPresented: $showPause) {
             PauseSheet(
+                runInfo: session.runState.map { PauseSheet.RunInfo(roundIndex: $0.roundIndex, act: $0.act, scoreThisBoard: $0.scoreThisBoard, scoreGoalForBoard: $0.scoreGoalForBoard) },
+                playerProfile: session.playerProfile,
                 onResume: { showPause = false },
                 onRestartRun: {
                     showPause = false
@@ -199,6 +243,14 @@ struct GameScreen: View {
                 if session.lastSubmitPoints > 0 {
                     enqueueScorePop(points: session.lastSubmitPoints)
                 }
+                let word = session.lastSubmittedWord
+                if !word.isEmpty, session.lastSubmitPoints > 0 {
+                    submitBeat = SubmitBeat(
+                        word: word,
+                        points: session.lastSubmitPoints,
+                        bonusDetail: session.lastSubmitFeedbackDetail
+                    )
+                }
             case .invalid:
                 withAnimation(.linear(duration: WordFeedbackStyle.Tunables.invalidShakeDuration)) {
                     wordPillShakeTrigger += 1
@@ -211,119 +263,258 @@ struct GameScreen: View {
 
     // MARK: - HUD
 
+    private static let hudSh = (StitchTheme.Colors.shadowColor.opacity(0.08), radius: CGFloat(4), x: CGFloat(0), y: CGFloat(2))
+
     private var hud: some View {
         let run = session.runState
+        let gearDisabled = session.showPerkDraft || session.showRunSummary || session.showRoundClearStamp || session.roundClearedInfo != nil || session.runState == nil
 
-        return VStack(spacing: ParchmentTheme.Spacing.sm) {
-            // Row 1: Board + Moves + Gear
-            HStack {
+        return VStack(spacing: GameChrome.panelSpacing) {
+            HStack(alignment: .center, spacing: GameChrome.panelSpacing) {
                 if let run = run {
-                    hudPill(title: "Board", value: "\(run.boardIndex)/\(RunState.Tunables.totalBoards)")
+                    actRoundPill(act: run.act, round: run.roundIndex, total: RunState.Tunables.totalRounds)
                 } else {
-                    hudPill(title: "Board", value: "—")
+                    Text("—")
+                        .font(StitchTheme.Typography.labelCaps(size: 12, weight: .heavy))
+                        .foregroundStyle(StitchTheme.BoardGame.textMuted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Spacer()
-                hudPill(title: "Moves", value: "\(session.moves)")
-                hudPill(
-                    title: "Mods",
-                    value: "\(run?.activePerks.count ?? 0)"
-                )
 
-                // Gear / pause button
-                Button {
-                    showPause = true
-                } label: {
+                Spacer(minLength: 0)
+
+                movesPill(session.moves)
+
+                Spacer(minLength: 0)
+
+                Button { SoundManager.shared.playButtonTap(); showPause = true } label: {
                     Image(systemName: "gearshape")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(ParchmentTheme.Palette.slate)
-                        .frame(width: 36, height: 44)
-                }
-                .buttonStyle(.plain)
-                .disabled(
-                    session.showPerkDraft
-                    || session.showRunSummary
-                    || session.showRoundClearStamp
-                    || session.runState == nil
-                )
-
-                #if DEBUG
-                Button { showDebugHUD.toggle() } label: {
-                    Image(systemName: showDebugHUD ? "ladybug.fill" : "ladybug")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(
-                            showDebugHUD
-                                ? ParchmentTheme.Palette.footerPurple
-                                : ParchmentTheme.Palette.slate.opacity(0.4)
+                        .font(.system(size: 15, weight: .black))
+                        .foregroundStyle(StitchTheme.BoardGame.textPrimary)
+                        .frame(width: 36, height: 36)
+                        .background(
+                            StitchRoundedSurface(
+                                fill: StitchTheme.BoardGame.surfaceWarm,
+                                border: StitchTheme.BoardGame.outline,
+                                shadow: StitchTheme.BoardGame.outline,
+                                cornerRadius: 18,
+                                lineWidth: 2.4,
+                                depth: StitchTheme.BoardGame.Depth.soft
+                            )
                         )
-                        .frame(width: 28, height: 44)
                 }
                 .buttonStyle(.plain)
-                #endif
+                .disabled(gearDisabled)
+                .opacity(gearDisabled ? 0.5 : 1)
+
+            }
+            .padding(.bottom, 10)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(StitchTheme.BoardGame.outline)
+                    .frame(height: 2)
             }
 
-            // Row 2: Dual objectives (Locks + Score)
             if let run = run {
-                let locksMet = run.locksBrokenThisBoard >= run.locksGoalForBoard
-                let scoreMet = run.scoreThisBoard >= run.scoreGoalForBoard
+                scoreProgressPill(current: run.scoreThisBoard, target: run.scoreGoalForBoard)
 
-                HStack(spacing: ParchmentTheme.Spacing.sm) {
-                    objectivePill(
-                        label: "Locks",
-                        current: run.locksBrokenThisBoard,
-                        target: run.locksGoalForBoard,
-                        met: locksMet
-                    )
-                    objectivePill(
-                        label: "Score",
-                        current: run.scoreThisBoard,
-                        target: run.scoreGoalForBoard,
-                        met: scoreMet
+                if session.isChallengeRound {
+                    challengePill(
+                        title: session.currentChallengeDisplayName ?? "CHALLENGE",
+                        primaryRule: session.currentChallengePrimaryText ?? session.currentChallengeRuleText ?? "Special round active",
+                        secondaryLabel: session.currentChallengeSecondaryLabel,
+                        secondaryText: session.currentChallengeSecondaryText
                     )
                 }
             }
         }
     }
 
-    private func objectivePill(label: String, current: Int, target: Int, met: Bool) -> some View {
-        let fill: Color = met ? ParchmentTheme.Palette.objectiveGreen.opacity(0.18) : ParchmentTheme.Palette.white
-        let strokeColor: Color = met ? ParchmentTheme.Palette.objectiveGreen : ParchmentTheme.Palette.ink.opacity(0.55)
-        let textColor: Color = met ? ParchmentTheme.Palette.objectiveGreenText : ParchmentTheme.Palette.ink
+    private func actRoundPill(act: Int, round: Int, total: Int) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "flag.checkered")
+                .font(.system(size: 14, weight: .black))
+                .foregroundStyle(StitchTheme.BoardGame.textPrimary)
+                .frame(width: 34, height: 34)
+                .background(
+                    StitchRoundedSurface(
+                        fill: StitchTheme.BoardGame.surfaceWarm,
+                        border: StitchTheme.BoardGame.outline,
+                        shadow: StitchTheme.BoardGame.outline,
+                        cornerRadius: 17,
+                        lineWidth: 2.4,
+                        depth: StitchTheme.BoardGame.Depth.soft
+                    )
+                )
 
-        return VStack(spacing: 1) {
-            Text(label.uppercased())
-                .font(.parchmentRounded(size: 9, weight: .bold))
-                .tracking(1.2)
-                .foregroundStyle(met ? ParchmentTheme.Palette.objectiveGreenText : ParchmentTheme.Palette.slate)
-            Text("\(current)/\(target)")
-                .font(.parchmentRounded(size: 17, weight: .heavy).monospacedDigit())
-                .foregroundStyle(textColor)
-                .lineLimit(1)
-                .minimumScaleFactor(0.65)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("BUCKET \(act)")
+                    .font(StitchTheme.Typography.labelCaps(size: 12, weight: .heavy))
+                    .foregroundStyle(StitchTheme.BoardGame.textPrimary)
+
+                Text("Round \(round)")
+                    .font(StitchTheme.Typography.body(size: 11, weight: .bold))
+                    .foregroundStyle(StitchTheme.BoardGame.gold)
+            }
+        }
+    }
+
+    private func movesPill(_ moves: Int) -> some View {
+        VStack(spacing: 2) {
+            Text("MOVES LEFT")
+                .font(StitchTheme.Typography.labelCaps(size: 9, weight: .heavy))
+                .foregroundStyle(StitchTheme.BoardGame.textPrimary)
+
+            Text("\(moves)")
+                .font(StitchTheme.Typography.valueHero(size: 20).monospacedDigit())
+                .foregroundStyle(StitchTheme.BoardGame.textPrimary)
+        }
+        .frame(width: 88, height: 48)
+        .background(
+            StitchRoundedSurface(
+                fill: StitchTheme.BoardGame.gold,
+                border: StitchTheme.BoardGame.outline,
+                shadow: StitchTheme.BoardGame.outline,
+                cornerRadius: 16,
+                lineWidth: 2.6,
+                depth: StitchTheme.BoardGame.Depth.soft
+            )
+        )
+    }
+
+    private func scoreProgressPill(current: Int, target: Int) -> some View {
+        let met = current >= target
+        let progress = min(1.0, CGFloat(current) / CGFloat(max(target, 1)))
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("SCORE")
+                    .font(StitchTheme.Typography.labelCaps(size: 9, weight: .heavy))
+                    .foregroundStyle(StitchTheme.BoardGame.textSecondary)
+
+                Spacer(minLength: 4)
+
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    Text(current.formatted(.number.grouping(.automatic)))
+                        .font(StitchTheme.Typography.valueHero(size: 20).monospacedDigit())
+                        .foregroundStyle(met ? StitchTheme.BoardGame.goldStrong : StitchTheme.BoardGame.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.68)
+
+                    Text("/")
+                        .font(StitchTheme.Typography.body(size: 13, weight: .semibold))
+                        .foregroundStyle(StitchTheme.BoardGame.textMuted)
+
+                    Text(target.formatted(.number.grouping(.automatic)))
+                        .font(StitchTheme.Typography.body(size: 14, weight: .heavy).monospacedDigit())
+                        .foregroundStyle(StitchTheme.BoardGame.textSecondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                }
+            }
+
+            GeometryReader { proxy in
+                let barWidth = proxy.size.width
+                ZStack(alignment: .leading) {
+                    Capsule(style: .continuous)
+                        .fill(StitchTheme.BoardGame.surfaceMuted)
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(StitchTheme.BoardGame.outline, lineWidth: 2)
+                        )
+                    Capsule(style: .continuous)
+                        .fill(met ? StitchTheme.BoardGame.goldStrong : StitchTheme.BoardGame.gold)
+                        .frame(width: max(0, (barWidth - 4) * progress))
+                        .padding(2)
+                }
+            }
+            .frame(height: 12)
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 10)
+        .frame(height: 58, alignment: .leading)
+        .padding(.horizontal, 14)
         .padding(.vertical, 8)
+        .background(panelBackground())
+    }
+
+
+
+    private func challengePill(
+        title: String,
+        primaryRule: String,
+        secondaryLabel: String?,
+        secondaryText: String?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+                .font(StitchTheme.Typography.labelCaps(size: 10, weight: .heavy))
+                .foregroundStyle(StitchTheme.BoardGame.goldStrong)
+
+            Text(primaryRule)
+                .font(StitchTheme.Typography.body(size: 12, weight: .heavy))
+                .foregroundStyle(StitchTheme.BoardGame.textPrimary)
+                .lineLimit(2)
+                .minimumScaleFactor(0.82)
+
+            if let secondaryLabel, let secondaryText {
+                HStack(alignment: .top, spacing: 8) {
+                    challengeMetaTag(text: secondaryLabel)
+
+                    Text(secondaryText)
+                        .font(StitchTheme.Typography.caption(size: 11))
+                        .foregroundStyle(StitchTheme.BoardGame.textSecondary)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.82)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .background(
-            Capsule(style: .continuous)
-                .fill(fill)
-                .overlay(
-                    Capsule(style: .continuous)
-                        .stroke(strokeColor, lineWidth: ParchmentTheme.Stroke.hud)
-                )
+            StitchRoundedSurface(
+                fill: StitchTheme.BoardGame.surfaceWarm,
+                border: StitchTheme.BoardGame.gold,
+                shadow: StitchTheme.BoardGame.outline,
+                cornerRadius: 20,
+                lineWidth: 1.8,
+                depth: StitchTheme.BoardGame.Depth.soft
+            )
         )
-        .shadow(
-            color: ParchmentTheme.Palette.ink.opacity(ParchmentTheme.Shadow.hud.opacity),
-            radius: ParchmentTheme.Shadow.hud.radius,
-            x: ParchmentTheme.Shadow.hud.x,
-            y: ParchmentTheme.Shadow.hud.y
-        )
+    }
+
+    private func challengeMetaTag(text: String) -> some View {
+        let isObjective = text == "OBJECTIVE"
+        let fill = isObjective
+            ? ParchmentTheme.Palette.objectiveTagFill
+            : StitchTheme.BoardGame.gold.opacity(0.22)
+        let stroke = isObjective
+            ? ParchmentTheme.Palette.objectiveTagStroke
+            : StitchTheme.BoardGame.gold.opacity(0.45)
+        let foreground = isObjective
+            ? ParchmentTheme.Palette.objectiveGreenText
+            : StitchTheme.BoardGame.goldStrong
+
+        return Text(text)
+            .font(StitchTheme.Typography.labelCaps(size: 8, weight: .heavy))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(fill)
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(stroke, lineWidth: 1.2)
+                    )
+            )
     }
 
     // MARK: - Board
 
     private var boardSection: some View {
         GeometryReader { proxy in
-            let boardShape = RoundedRectangle(cornerRadius: ParchmentTheme.Radius.boardOuter, style: .continuous)
+            let boardShape = RoundedRectangle(cornerRadius: StitchTheme.Board.cornerRadius, style: .continuous)
             let reduceMotion = AppSettings.reduceMotion
 
             SpriteView(
@@ -340,10 +531,13 @@ struct GameScreen: View {
                     if showBoardIntroBanner {
                         BoardIntroBanner(
                             currentAct: session.currentAct,
-                            boardIndex: session.boardIndex,
+                            roundIndex: session.currentRound,
                             templateDisplayName: session.templateDisplayName,
                             hasStones: session.hasStones,
-                            isBoss: session.isBoss
+                            isChallengeRound: session.isChallengeRound,
+                            challengePrimaryText: session.currentChallengePrimaryText ?? session.currentChallengeRuleText,
+                            challengeSecondaryLabel: session.currentChallengeSecondaryLabel,
+                            challengeSecondaryText: session.currentChallengeSecondaryText
                         )
                         .padding(.top, BoardIntroBanner.Tunables.topInset)
                         .transition(
@@ -361,54 +555,46 @@ struct GameScreen: View {
                 }
                 .background(
                     boardShape
-                        .fill(ParchmentTheme.Palette.boardOuter)
+                        .fill(StitchTheme.BoardGame.surfaceWarm.opacity(BoardVisuals.fieldOpacity))
                         .overlay {
-                            Image("board_texture")
-                                .resizable()
-                                .scaledToFill()
-                                .opacity(BoardVisuals.textureOpacity)
-                                .clipShape(boardShape)
+                            StitchDotPattern(
+                                color: StitchTheme.BoardGame.outline.opacity(BoardVisuals.dotOpacity),
+                                spacing: 12,
+                                dotSize: 2
+                            )
+                            .clipShape(boardShape)
                         }
-                        .overlay(
-                            boardShape
-                                .stroke(ParchmentTheme.Palette.boardInset, lineWidth: 1.6)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: ParchmentTheme.Radius.boardInner, style: .continuous)
-                                .stroke(
-                                    ParchmentTheme.Palette.boardDash,
-                                    style: StrokeStyle(lineWidth: 1.2, dash: [7, 5], dashPhase: 0)
-                                )
-                                .padding(6)
-                        )
+                        .padding(2)
+                        .allowsHitTesting(false)
                 )
-                .clipShape(boardShape)
+                .overlay {
+                    boardShape
+                        .stroke(StitchTheme.BoardGame.gold.opacity(0.04), lineWidth: 0.8)
+                        .padding(2)
+                        .allowsHitTesting(false)
+                }
         }
-        .shadow(
-            color: ParchmentTheme.Palette.ink.opacity(ParchmentTheme.Shadow.board.opacity),
-            radius: ParchmentTheme.Shadow.board.radius,
-            x: ParchmentTheme.Shadow.board.x,
-            y: ParchmentTheme.Shadow.board.y
-        )
         .aspectRatio(1, contentMode: .fit)
+        .padding(.horizontal, GameChrome.boardHorizontalBleed)
     }
 
     // MARK: - Word selection pill
 
     private var wordSelectionPill: some View {
-        let overlayLocked = session.showPerkDraft || session.showRunSummary || session.showRoundClearStamp || session.isPaused
+        let overlayLocked = session.showPerkDraft || session.showRunSummary || session.showRoundClearStamp || session.roundClearedInfo != nil || session.isPaused
         let isBuilding = !session.currentWordText.isEmpty && session.lastSubmitOutcome == .idle
-
-        // feedbackTitle is non-nil only during valid/invalid flash; nil → show mini tiles
         let feedbackTitle: String?
         let subtitleText: String?
         let borderColor: Color
         let textColor: Color
+        let wordDisplay = session.currentWordText.isEmpty
+            ? "WORD"
+            : session.currentWordText.map(String.init).joined(separator: " ")
 
         switch session.lastSubmitOutcome {
         case .valid:
             feedbackTitle = "+\(session.lastSubmitPoints)"
-            subtitleText = "Great word"
+            subtitleText = session.lastSubmitFeedbackDetail ?? "Great word"
             borderColor = WordFeedbackStyle.Colors.validBorder
             textColor = WordFeedbackStyle.Colors.validText
         case .invalid:
@@ -419,29 +605,29 @@ struct GameScreen: View {
         case .idle:
             feedbackTitle = nil
             subtitleText = nil
-            borderColor = isBuilding ? ParchmentTheme.Palette.ink : ParchmentTheme.Palette.slate.opacity(0.35)
-            textColor = ParchmentTheme.Palette.slate
+            borderColor = StitchTheme.BoardGame.gold
+            textColor = isBuilding ? StitchTheme.BoardGame.textPrimary : StitchTheme.BoardGame.textSecondary
         }
 
         return HStack(spacing: 10) {
-            VStack(spacing: subtitleText == nil ? 0 : 2) {
+            VStack(spacing: subtitleText == nil ? 0 : 4) {
                 if let title = feedbackTitle {
-                    // Valid / invalid flash: plain text feedback
                     Text(title)
-                        .font(.parchmentRounded(size: 18, weight: .heavy))
+                        .font(StitchTheme.Typography.valueHero(size: 22))
                         .foregroundStyle(textColor)
                         .lineLimit(1)
                         .minimumScaleFactor(0.62)
                 } else {
-                    // Idle: mini tile row (or placeholder when empty)
-                    WordPillTiles(
-                        letters: session.currentSelectionLetters,
-                        tileMeta: session.currentSelectionMeta
-                    )
+                    Text(wordDisplay)
+                        .font(StitchTheme.Typography.valueHero(size: 20))
+                        .tracking(session.currentWordText.isEmpty ? 3 : 5)
+                        .foregroundStyle(textColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.68)
                 }
                 if let sub = subtitleText {
                     Text(sub)
-                        .font(.parchmentRounded(size: 11, weight: .bold))
+                        .font(StitchTheme.Typography.caption(size: 11))
                         .foregroundStyle(textColor.opacity(0.8))
                         .lineLimit(1)
                 }
@@ -451,28 +637,27 @@ struct GameScreen: View {
             if isBuilding {
                 Button(action: { session.removeLastSelectionTile() }) {
                     Image(systemName: "delete.backward")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(ParchmentTheme.Palette.slate)
+                        .font(.system(size: 15, weight: .black))
+                        .foregroundStyle(StitchTheme.BoardGame.textSecondary)
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)             // 34pt tile + 10+10 = 54pt pill height
+        .frame(minHeight: 60)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
         .background(
-            Capsule(style: .continuous)
-                .fill(ParchmentTheme.Palette.white.opacity(session.lastSubmitOutcome == .idle && !isBuilding ? 0.86 : 1))
-                .overlay(
-                    Capsule(style: .continuous)
-                        .stroke(borderColor, lineWidth: ParchmentTheme.Stroke.hud)
-                )
+            StitchRoundedSurface(
+                fill: StitchTheme.BoardGame.surface,
+                border: borderColor,
+                shadow: StitchTheme.BoardGame.outline,
+                cornerRadius: 22,
+                lineWidth: 2.2,
+                depth: StitchTheme.BoardGame.Depth.soft,
+                dash: session.lastSubmitOutcome == .idle ? [6, 4] : []
+            )
         )
-        .shadow(
-            color: ParchmentTheme.Palette.ink.opacity(ParchmentTheme.Shadow.hud.opacity * 0.7),
-            radius: ParchmentTheme.Shadow.hud.radius,
-            x: ParchmentTheme.Shadow.hud.x,
-            y: ParchmentTheme.Shadow.hud.y
-        )
+        .padding(.bottom, StitchTheme.BoardGame.Depth.soft)
         .modifier(ShakeEffect(animatableData: wordPillShakeTrigger, amplitude: WordFeedbackStyle.Tunables.invalidShakeAmplitude, shakesPerUnit: WordFeedbackStyle.Tunables.invalidShakesPerUnit))
         .onTapGesture {
             if !overlayLocked {
@@ -490,122 +675,84 @@ struct GameScreen: View {
             || session.showPerkDraft
             || session.showRunSummary
             || session.showRoundClearStamp
+            || session.roundClearedInfo != nil
         let inv = session.runState?.inventory ?? Inventory()
         let shuffles = session.runState?.shufflesRemaining ?? session.shufflesRemaining
 
-        return HStack(spacing: ParchmentTheme.Spacing.sm) {
-            powerupButton(
-                type: .hint,
-                count: inv.hints,
-                fill: ParchmentTheme.Palette.footerBlue,
-                stroke: ParchmentTheme.Palette.footerBlueStroke,
-                locked: locked
-            ) {
-                session.useHint()
-            }
-
-            powerupButton(
-                type: .shuffle,
-                count: shuffles,
-                fill: ParchmentTheme.Palette.footerYellow,
-                stroke: ParchmentTheme.Palette.footerYellowStroke,
-                locked: locked
-            ) {
-                session.useShuffle()
-            }
-
-            powerupButton(
-                type: .wildcard,
-                count: inv.wildcards,
-                fill: ParchmentTheme.Palette.footerPurple,
-                stroke: ParchmentTheme.Palette.footerPurpleStroke,
-                locked: locked,
-                isHighlighted: session.isPlacingWildcard
-            ) {
-                session.startWildcardPlacement()
-            }
-
-            powerupButton(
-                type: .undo,
-                count: inv.undos,
-                fill: Color(hex: 0xFF922B),
-                stroke: Color(hex: 0xD9480F),
-                locked: locked || !session.canUndo
-            ) {
-                session.useUndo()
-            }
+        return HStack(spacing: 10) {
+            powerupButton(type: .hint, count: inv.hints, locked: locked) { session.useHint() }
+            powerupButton(type: .shuffle, count: shuffles, locked: locked) { session.useShuffle() }
+            powerupButton(type: .wildcard, count: inv.wildcards, locked: locked, isHighlighted: session.isPlacingWildcard) { session.startWildcardPlacement() }
+            powerupButton(type: .undo, count: inv.undos, locked: locked || !session.canUndo) { session.useUndo() }
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
+        .background(
+            StitchRoundedSurface(
+                fill: StitchTheme.BoardGame.surfaceWarm,
+                border: StitchTheme.BoardGame.outline,
+                shadow: StitchTheme.BoardGame.outline,
+                cornerRadius: 16,
+                lineWidth: 2.2,
+                depth: StitchTheme.BoardGame.Depth.soft
+            )
+        )
+        .padding(.bottom, StitchTheme.BoardGame.Depth.soft)
     }
 
     private func powerupButton(
         type: PowerupType,
         count: Int,
-        fill: Color,
-        stroke: Color,
         locked: Bool,
         isHighlighted: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
-        let isEmpty = count == 0
-        let isDisabled = isEmpty || locked
+        let isDisabled = count == 0 || locked
 
         return Button(action: action) {
-            ZStack(alignment: .topTrailing) {
-                VStack(spacing: 2) {
+            VStack(spacing: 6) {
+                ZStack(alignment: .topTrailing) {
                     Image(systemName: type.systemIcon)
-                        .font(.system(size: 14, weight: .bold))
-                    Text(type.displayName)
-                        .font(.parchmentRounded(size: 9, weight: .heavy))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                }
-                .foregroundStyle(.white.opacity(isDisabled ? 0.45 : 1.0))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 9)
-                .background(
-                    RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button, style: .continuous)
-                        .fill(fill.opacity(isDisabled ? 0.40 : (isHighlighted ? 0.95 : 1.0)))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button, style: .continuous)
-                                .stroke(
-                                    stroke.opacity(isDisabled ? 0.30 : 1.0),
-                                    lineWidth: isHighlighted ? ParchmentTheme.Stroke.button + 1.5 : ParchmentTheme.Stroke.button
+                        .font(.system(size: 17, weight: .black))
+                        .foregroundStyle(isDisabled ? StitchTheme.BoardGame.textMuted : StitchTheme.BoardGame.textPrimary)
+                        .frame(width: 46, height: 46)
+                        .background(
+                            StitchRoundedSurface(
+                                fill: StitchTheme.BoardGame.surface,
+                                border: isHighlighted && !isDisabled ? StitchTheme.BoardGame.gold : StitchTheme.BoardGame.outline,
+                                shadow: StitchTheme.BoardGame.outline,
+                                cornerRadius: 15,
+                                lineWidth: isHighlighted && !isDisabled ? 2.4 : 2.0,
+                                depth: StitchTheme.BoardGame.Depth.soft
+                            )
+                        )
+
+                    Text("\(count)")
+                        .font(StitchTheme.Typography.labelCaps(size: 9, weight: .heavy).monospacedDigit())
+                        .foregroundStyle(isDisabled ? StitchTheme.BoardGame.textMuted : StitchTheme.BoardGame.textPrimary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(StitchTheme.BoardGame.surface)
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .stroke(StitchTheme.BoardGame.outline, lineWidth: 1.6)
                                 )
                         )
-                )
-                .shadow(
-                    color: ParchmentTheme.Palette.ink.opacity(isDisabled ? 0.05 : ParchmentTheme.Shadow.button.opacity * 0.6),
-                    radius: ParchmentTheme.Shadow.button.radius,
-                    x: ParchmentTheme.Shadow.button.x,
-                    y: ParchmentTheme.Shadow.button.y
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button - 16, style: .continuous)
-                        .fill(Color.white.opacity(0.12))
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 4.5)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button, style: .continuous)
-                        .stroke(Color.white.opacity(isHighlighted && !isDisabled ? 0.7 : 0.0), lineWidth: 2)
-                        .padding(1)
-                )
+                        .offset(x: 4, y: -5)
+                }
 
-                // Count badge
-                Text("\(count)")
-                    .font(.system(size: 11, weight: .black))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(isDisabled ? Color.gray.opacity(0.50) : stroke)
-                    )
-                    .offset(x: -4, y: 4)
+                Text(type.displayName.uppercased())
+                    .font(StitchTheme.Typography.labelCaps(size: 9, weight: .heavy))
+                    .foregroundStyle(isDisabled ? StitchTheme.BoardGame.textMuted : StitchTheme.BoardGame.textPrimary)
+                    .lineLimit(1)
             }
+            .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
+        .opacity(isDisabled ? 0.7 : 1)
     }
 
     // MARK: - Submit row
@@ -613,7 +760,7 @@ struct GameScreen: View {
     private var submitRow: some View {
         let selectionCount = session.currentSelectionIndices.count
         let submitCost = session.computeSubmitCost(selectionIndices: session.currentSelectionIndices)
-        let hasValidLength = (4...8).contains(selectionCount)
+        let hasValidLength = (session.minimumSubmitLength...session.maximumSubmitLength).contains(selectionCount)
         let canSubmit = hasValidLength
             && session.moves >= submitCost
             && !session.isPaused
@@ -621,135 +768,47 @@ struct GameScreen: View {
             && !session.showPerkDraft
             && !session.showRunSummary
             && !session.showRoundClearStamp
-        let costLabel = submitCost == 2 ? "Cost: 2 (LOCKED)" : "Cost: 1"
+            && session.roundClearedInfo == nil
+        let costLabel = session.submitCostLabel(selectionIndices: session.currentSelectionIndices)
 
         return VStack(spacing: 4) {
             Button(action: {
                 session.submitPath(indices: session.currentSelectionIndices)
             }) {
-                toyLabel(
-                    "Submit",
-                    fill: ParchmentTheme.Palette.footerRed.opacity(canSubmit ? 1.0 : 0.45),
-                    stroke: ParchmentTheme.Palette.footerRedStroke.opacity(canSubmit ? 1.0 : 0.35)
-                )
+                Text("Submit")
+                    .font(StitchTheme.Typography.valueHero(size: 18))
+                    .tracking(2)
+                    .textCase(.uppercase)
+                    .foregroundStyle(StitchTheme.BoardGame.textPrimary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 64)
+                    .background(
+                        StitchRoundedSurface(
+                            fill: canSubmit ? StitchTheme.BoardGame.gold : StitchTheme.BoardGame.surfaceMuted,
+                            border: StitchTheme.BoardGame.outline,
+                            shadow: StitchTheme.BoardGame.outline,
+                            cornerRadius: 22,
+                            lineWidth: 2.6,
+                            depth: StitchTheme.BoardGame.Depth.soft
+                        )
+                    )
+                    .padding(.bottom, StitchTheme.BoardGame.Depth.soft)
             }
             .buttonStyle(.plain)
             .disabled(!canSubmit)
-            .shadow(
-                color: ParchmentTheme.Palette.footerRed.opacity(canSubmit ? 0.22 : 0),
-                radius: 10, x: 0, y: 2
-            )
             .simultaneousGesture(
                 LongPressGesture(minimumDuration: 0.45)
                     .onEnded { _ in session.clearCurrentSelection() }
             )
 
             Text(costLabel)
-                .font(.parchmentRounded(size: 11, weight: .bold))
-                .foregroundStyle(ParchmentTheme.Palette.slate.opacity(0.8))
+                .font(StitchTheme.Typography.caption(size: 10))
+                .foregroundStyle(StitchTheme.BoardGame.textSecondary)
                 .opacity(selectionCount > 0 ? 1 : 0)
 
-            Text("Select 4–8 letters")
-                .font(.parchmentRounded(size: 11, weight: .bold))
-                .foregroundStyle(ParchmentTheme.Palette.slate.opacity(0.65))
-                .opacity(canSubmit ? 0 : 1)
         }
     }
 
-    // MARK: - Debug overlay
-
-    @ViewBuilder
-    private var debugOverlay: some View {
-        if showDebugHUD {
-            VStack(spacing: 4) {
-                HStack {
-                    Text("lastSubmittedWord: \(session.lastSubmittedWord.isEmpty ? "—" : session.lastSubmittedWord)")
-                    Spacer()
-                }
-
-                HStack {
-                    Text("status: \(session.status)")
-                    Spacer()
-                }
-
-                HStack {
-                    Text("locksBrokenThisMove: \(session.locksBrokenThisMove)")
-                    Spacer()
-                }
-
-                HStack {
-                    Text("locksBrokenTotal: \(session.locksBrokenTotal)")
-                    Spacer()
-                }
-
-                HStack {
-                    Text("currentLockedCount: \(session.currentLockedCount)")
-                    Spacer()
-                }
-
-                HStack {
-                    Text("usedTileIdsCount: \(session.usedTileIdsCount)")
-                    Spacer()
-                }
-
-                HStack {
-                    Text("activePathLength: \(session.activePathLength)")
-                    Spacer()
-                }
-
-                HStack {
-                    Text("hintWord: \(session.hintWord ?? "—")")
-                    Spacer()
-                }
-
-                HStack {
-                    Text("hintIndices: \(session.hintPath?.map { "\($0)" }.joined(separator: ",") ?? "—")")
-                    Spacer()
-                }
-
-                HStack {
-                    Text("hintIsValid: \(session.hintIsValid ? "true" : "false")")
-                    Spacer()
-                }
-
-                if let run = session.runState {
-                    Divider()
-                    HStack {
-                        Text("board: \(run.boardIndex)/\(RunState.Tunables.totalBoards) boss:\(run.isBossBoard ? "Y" : "N")")
-                        Spacer()
-                    }
-                    HStack {
-                        Text("locks: \(run.locksBrokenThisBoard)/\(run.locksGoalForBoard)  score: \(run.scoreThisBoard)/\(run.scoreGoalForBoard)")
-                        Spacer()
-                    }
-                    HStack {
-                        Text("shuffles: \(run.shufflesRemaining)  moveFrac: \(String(format: "%.2f", run.pendingMoveFraction))")
-                        Spacer()
-                    }
-                    HStack {
-                        Text("inventory: H\(run.inventory.hints) W\(run.inventory.wildcards) U\(run.inventory.undos)")
-                        Spacer()
-                    }
-                    HStack {
-                        Text("activePerks: \(run.activePerks.map { $0.rawValue }.joined(separator: ","))")
-                        Spacer()
-                    }
-                }
-            }
-            .font(.caption.monospaced())
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(0.45))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(ParchmentTheme.Palette.ink.opacity(0.25), lineWidth: 1)
-                    )
-            )
-            .foregroundStyle(ParchmentTheme.Palette.ink)
-        }
-    }
 
     // MARK: - Score pop
 
@@ -808,157 +867,182 @@ struct GameScreen: View {
 
     // MARK: - Shared view helpers
 
-    private func hudPill(title: String, value: String) -> some View {
-        VStack(spacing: 1) {
-            Text(title)
-                .font(.parchmentRounded(size: 10, weight: .bold))
-                .textCase(.uppercase)
-                .tracking(1)
-                .foregroundStyle(ParchmentTheme.Palette.slate)
-            Text(value)
-                .font(.parchmentRounded(size: 22, weight: .heavy).monospacedDigit())
-                .foregroundStyle(ParchmentTheme.Palette.ink)
-                .lineLimit(1)
-                .minimumScaleFactor(0.65)
-        }
-        .padding(.horizontal, 19)
-        .padding(.vertical, 9)
-        .background(
-            Capsule(style: .continuous)
-                .fill(ParchmentTheme.Palette.white)
-                .overlay(
-                    Capsule(style: .continuous)
-                        .stroke(ParchmentTheme.Palette.ink, lineWidth: ParchmentTheme.Stroke.hud)
-                )
+    private func panelBackground(
+        fill: Color = StitchTheme.BoardGame.surface,
+        border: Color = StitchTheme.BoardGame.outline
+    ) -> some View {
+        StitchRoundedSurface(
+            fill: fill,
+            border: border,
+            shadow: StitchTheme.BoardGame.outline,
+            cornerRadius: 20,
+            lineWidth: 2.4,
+            depth: StitchTheme.BoardGame.Depth.soft
         )
-        .shadow(
-            color: ParchmentTheme.Palette.ink.opacity(ParchmentTheme.Shadow.hud.opacity),
-            radius: ParchmentTheme.Shadow.hud.radius,
-            x: ParchmentTheme.Shadow.hud.x,
-            y: ParchmentTheme.Shadow.hud.y
-        )
-        .rotationEffect(.degrees(title == "Board" ? -1.4 : 1.1))
-    }
-
-    private func toyLabel(_ text: String, fill: Color, stroke: Color) -> some View {
-        Text(text)
-            .font(.parchmentRounded(size: 17, weight: .heavy))
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 19)
-            .background(
-                RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button, style: .continuous)
-                    .fill(fill)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button, style: .continuous)
-                            .stroke(stroke, lineWidth: ParchmentTheme.Stroke.button)
-                    )
-            )
-            .shadow(
-                color: ParchmentTheme.Palette.ink.opacity(ParchmentTheme.Shadow.button.opacity),
-                radius: ParchmentTheme.Shadow.button.radius,
-                x: ParchmentTheme.Shadow.button.x,
-                y: ParchmentTheme.Shadow.button.y
-            )
-            .shadow(
-                color: ParchmentTheme.Palette.ink.opacity(0.16),
-                radius: 5,
-                x: 0,
-                y: 8
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button - 16, style: .continuous)
-                    .fill(Color.white.opacity(0.12))
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 4.5)
-            )
     }
 }
+
+
 
 // MARK: - Pause sheet
 
 private struct PauseSheet: View {
+    struct RunInfo {
+        let roundIndex: Int
+        let act: Int
+        let scoreThisBoard: Int
+        let scoreGoalForBoard: Int
+    }
+
+    let runInfo: RunInfo?
+    let playerProfile: PlayerProfile?
     let onResume: () -> Void
     let onRestartRun: () -> Void
     let onQuitRun: () -> Void
+
     @State private var showSettings: Bool = false
     @State private var showRestartConfirmation: Bool = false
+    @State private var showQuitConfirmation: Bool = false
+
+    private let sh = StitchTheme.Shadow.sheet
+    private let panelRadius: CGFloat = 32
 
     var body: some View {
-        VStack(spacing: ParchmentTheme.Spacing.lg) {
-            Text("Paused")
-                .font(.parchmentRounded(size: 28, weight: .heavy))
-                .foregroundStyle(ParchmentTheme.Palette.ink)
-                .padding(.top, ParchmentTheme.Spacing.lg)
+        ZStack {
+            StitchTheme.Colors.backdrop
+                .ignoresSafeArea()
+                .onTapGesture { }
 
-            Divider()
-
-            VStack(spacing: ParchmentTheme.Spacing.md) {
-                pauseButton(
-                    "Resume",
-                    fill: ParchmentTheme.Palette.objectiveGreen,
-                    stroke: ParchmentTheme.Palette.objectiveGreenText,
-                    action: onResume
-                )
-                pauseButton(
-                    "Settings",
-                    fill: ParchmentTheme.Palette.footerBlue,
-                    stroke: ParchmentTheme.Palette.footerBlueStroke,
-                    action: { showSettings = true }
-                )
-                pauseButton(
-                    "Restart Run",
-                    fill: ParchmentTheme.Palette.footerYellow,
-                    stroke: ParchmentTheme.Palette.footerYellowStroke,
-                    action: { showRestartConfirmation = true }
-                )
-                pauseButton(
-                    "Quit Run",
-                    fill: ParchmentTheme.Palette.footerRed,
-                    stroke: ParchmentTheme.Palette.footerRedStroke,
-                    action: onQuitRun
-                )
-            }
-
-            Spacer()
+            pausePanel
+                .padding(.horizontal, StitchTheme.Space._5)
+                .padding(.vertical, StitchTheme.Space._6)
         }
-        .padding(.horizontal, ParchmentTheme.Spacing.xl)
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+        .presentationBackground(.clear)
         .sheet(isPresented: $showSettings) {
-            SettingsView()
-                .environmentObject(SettingsStore.shared)
+            SettingsView(playerProfile: playerProfile)
         }
-        .alert("Restart Run?", isPresented: $showRestartConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Restart") {
-                onRestartRun()
+        .overlay {
+            if showRestartConfirmation {
+                confirmationCard(
+                    title: "Restart Run?",
+                    message: "You'll lose current progress for this run.",
+                    cancel: { showRestartConfirmation = false },
+                    confirmTitle: "Restart",
+                    onConfirm: onRestartRun
+                )
             }
-        } message: {
-            Text("You’ll lose current progress for this run.")
+            if showQuitConfirmation {
+                confirmationCard(
+                    title: "Quit Run?",
+                    message: "You'll return to the menu. Run progress will be lost.",
+                    cancel: { showQuitConfirmation = false },
+                    confirmTitle: "Quit Run",
+                    onConfirm: onQuitRun
+                )
+            }
         }
     }
 
-    private func pauseButton(_ title: String, fill: Color, stroke: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.parchmentRounded(size: 18, weight: .heavy))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 18)
-                .background(
-                    RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button, style: .continuous)
-                        .fill(fill)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button, style: .continuous)
-                                .stroke(stroke, lineWidth: ParchmentTheme.Stroke.button)
-                        )
-                )
+    private var pausePanel: some View {
+        VStack(spacing: 0) {
+            headerSection
+            Divider()
+                .overlay(StitchTheme.Colors.strokeStandard)
+                .padding(.vertical, StitchTheme.Space._4)
+
+            VStack(spacing: StitchTheme.Space._3) {
+                Button(action: onResume) { Text("Resume") }
+                    .buttonStyle(StitchPrimaryButtonStyle())
+
+                Button(action: { showSettings = true }) { Text("Settings") }
+                    .buttonStyle(StitchSecondaryButtonStyle())
+
+                pauseDangerButton("Restart Run") { showRestartConfirmation = true }
+                pauseDangerButton("Quit Run") { showQuitConfirmation = true }
+            }
         }
-        .buttonStyle(.plain)
+        .padding(StitchTheme.Space._6)
+        .frame(maxWidth: 420)
+        .background(
+            RoundedRectangle(cornerRadius: panelRadius, style: .continuous)
+                .fill(StitchTheme.Colors.bgSheet)
+                .overlay(
+                    RoundedRectangle(cornerRadius: panelRadius, style: .continuous)
+                        .stroke(StitchTheme.Colors.strokeStandard, lineWidth: StitchTheme.Stroke.standard)
+                )
+        )
+        .shadow(color: sh.color, radius: sh.radius, x: sh.x, y: sh.y)
     }
+
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: StitchTheme.Space._2) {
+            Text("PAUSED")
+                .font(StitchTheme.Typography.labelCaps(size: 11, weight: .heavy))
+                .tracking(1)
+                .foregroundStyle(StitchTheme.Colors.inkSecondary)
+
+            if let info = runInfo {
+                Text("Bucket \(info.act) · Round \(info.roundIndex)/\(RunState.Tunables.totalRounds)")
+                    .font(StitchTheme.Typography.caption(size: 13))
+                    .foregroundStyle(StitchTheme.Colors.inkMuted)
+                Text("Score \(info.scoreThisBoard) / \(info.scoreGoalForBoard)")
+                    .font(StitchTheme.Typography.body(size: 15, weight: .heavy).monospacedDigit())
+                    .foregroundStyle(StitchTheme.Colors.inkPrimary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func pauseDangerButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Text(title) }
+            .buttonStyle(StitchDestructiveButtonStyle())
+    }
+
+    private func confirmationCard(
+        title: String,
+        message: String,
+        cancel: @escaping () -> Void,
+        confirmTitle: String,
+        onConfirm: @escaping () -> Void
+    ) -> some View {
+        ZStack {
+            StitchTheme.Colors.backdrop
+                .ignoresSafeArea()
+                .onTapGesture(perform: cancel)
+
+            VStack(spacing: StitchTheme.Space._5) {
+                Text(title)
+                    .font(StitchTheme.Typography.body(size: 18, weight: .heavy))
+                    .foregroundStyle(StitchTheme.Colors.inkPrimary)
+                Text(message)
+                    .font(StitchTheme.Typography.caption(size: 14))
+                    .foregroundStyle(StitchTheme.Colors.inkSecondary)
+                    .multilineTextAlignment(.center)
+
+                HStack(spacing: StitchTheme.Space._3) {
+                    Button(action: cancel) { Text("Cancel") }
+                        .buttonStyle(StitchSecondaryButtonStyle())
+                    Button(action: onConfirm) { Text(confirmTitle) }
+                        .buttonStyle(StitchDestructiveButtonStyle())
+                }
+            }
+            .padding(StitchTheme.Space._6)
+            .frame(maxWidth: 320)
+            .background(
+                RoundedRectangle(cornerRadius: StitchTheme.Radii.xl, style: .continuous)
+                    .fill(StitchTheme.Colors.bgSheet)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: StitchTheme.Radii.xl, style: .continuous)
+                            .stroke(StitchTheme.Colors.strokeStandard, lineWidth: StitchTheme.Stroke.standard)
+                    )
+            )
+            .shadow(color: sh.color, radius: sh.radius, x: sh.x, y: sh.y)
+        }
+        .transition(AppSettings.reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.96)))
+    }
+
 }
 
 // MARK: - Parchment backdrop (shared with StartScreen and MilestonesScreen)
@@ -1009,6 +1093,134 @@ struct ParchmentBackdrop: View {
     }
 }
 
+// MARK: - Submit Score Beat (Balatro-style word score presentation)
+
+private struct SubmitBeat: Identifiable {
+    let id: UUID = UUID()
+    let word: String
+    let points: Int
+    let bonusDetail: String?
+}
+
+private struct SubmitScoreBeatView: View {
+    let beat: SubmitBeat
+    let reduceMotion: Bool
+    let onDismiss: () -> Void
+
+    private enum Timing {
+        static let enterDuration: TimeInterval = 0.14
+        static let countSteps: Int = 18
+        static let countDuration: TimeInterval = 0.30
+        static let holdDuration: TimeInterval = 0.14
+        static let exitDuration: TimeInterval = 0.16
+    }
+
+    @State private var visible: Bool = false
+    @State private var displayedPoints: Int = 0
+    @State private var pulseScale: CGFloat = 1.0
+    @State private var beatTask: Task<Void, Never>? = nil
+
+    var body: some View {
+        VStack(spacing: 5) {
+            // Submitted word
+            Text(beat.word.map(String.init).joined(separator: " "))
+                .font(.system(size: 15, weight: .black, design: .rounded))
+                .tracking(3.5)
+                .foregroundStyle(StitchTheme.BoardGame.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+
+            // Score delta
+            Text("+\(displayedPoints)")
+                .font(.system(size: 34, weight: .black, design: .rounded))
+                .foregroundStyle(StitchTheme.BoardGame.gold)
+                .monospacedDigit()
+                .scaleEffect(pulseScale)
+
+            // Optional perk bonus
+            if let detail = beat.bonusDetail {
+                Text(detail)
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(StitchTheme.BoardGame.textSecondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 14)
+        .background(
+            StitchRoundedSurface(
+                fill: StitchTheme.BoardGame.surface,
+                border: StitchTheme.BoardGame.gold,
+                shadow: StitchTheme.BoardGame.outline,
+                cornerRadius: 20,
+                lineWidth: 2.4,
+                depth: 4
+            )
+        )
+        .shadow(color: StitchTheme.BoardGame.outline.opacity(0.18), radius: 14, x: 0, y: 6)
+        .scaleEffect(visible ? 1.0 : (reduceMotion ? 1.0 : 0.80))
+        .opacity(visible ? 1.0 : 0.0)
+        .onAppear { startBeatSequence() }
+        .onDisappear { beatTask?.cancel() }
+    }
+
+    private func startBeatSequence() {
+        beatTask?.cancel()
+        beatTask = Task { @MainActor in
+            // Enter
+            withAnimation(
+                reduceMotion
+                    ? .easeOut(duration: 0.08)
+                    : .spring(response: Timing.enterDuration, dampingFraction: 0.72)
+            ) {
+                visible = true
+            }
+            try? await Task.sleep(nanoseconds: UInt64(Timing.enterDuration * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+
+            // Count up
+            let steps = Timing.countSteps
+            let stepDelay = Timing.countDuration / Double(steps)
+            for i in 1...steps {
+                try? await Task.sleep(nanoseconds: UInt64(stepDelay * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                let progress = Double(i) / Double(steps)
+                let eased = 1.0 - pow(1.0 - progress, 2.2)
+                displayedPoints = Int((Double(beat.points) * eased).rounded())
+                // Play a soft tick every 3 count steps (keeps it subtle, not spammy).
+                if i % 3 == 0 || i == steps {
+                    SoundManager.shared.playTallyTick()
+                }
+            }
+            displayedPoints = beat.points
+
+            // Micro-pulse on landing
+            if !reduceMotion {
+                withAnimation(.spring(response: 0.12, dampingFraction: 0.55)) {
+                    pulseScale = 1.12
+                }
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation(.spring(response: 0.14, dampingFraction: 0.72)) {
+                    pulseScale = 1.0
+                }
+            }
+
+            // Hold
+            try? await Task.sleep(nanoseconds: UInt64(Timing.holdDuration * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+
+            // Exit
+            withAnimation(.easeIn(duration: Timing.exitDuration)) {
+                visible = false
+            }
+            try? await Task.sleep(nanoseconds: UInt64(Timing.exitDuration * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            onDismiss()
+        }
+    }
+}
+
 private struct FloatingScorePop: View {
     let text: String
     let rise: CGFloat
@@ -1019,19 +1231,19 @@ private struct FloatingScorePop: View {
 
     var body: some View {
         Text(text)
-            .font(.parchmentRounded(size: 28, weight: .heavy))
-            .foregroundStyle(ParchmentTheme.Palette.objectiveGreenText)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
+            .font(StitchTheme.Typography.valueHero(size: 24))
+            .foregroundStyle(StitchTheme.Colors.accentGold)
+            .padding(.horizontal, StitchTheme.Space._3)
+            .padding(.vertical, StitchTheme.Space._1)
             .background(
-                Capsule(style: .continuous)
-                    .fill(ParchmentTheme.Palette.white.opacity(0.94))
+                RoundedRectangle(cornerRadius: StitchTheme.Radii.sm, style: .continuous)
+                    .fill(StitchTheme.Colors.surfaceCard)
                     .overlay(
-                        Capsule(style: .continuous)
-                            .stroke(ParchmentTheme.Palette.objectiveGreen, lineWidth: 2)
+                        RoundedRectangle(cornerRadius: StitchTheme.Radii.sm, style: .continuous)
+                            .stroke(StitchTheme.Colors.accentGold, lineWidth: StitchTheme.Stroke.standard)
                     )
             )
-            .shadow(color: ParchmentTheme.Palette.ink.opacity(0.15), radius: 4, x: 0, y: 2)
+            .shadow(color: StitchTheme.Colors.shadowColor.opacity(0.12), radius: 4, x: 0, y: 2)
             .offset(y: animateOut ? -rise : 0)
             .opacity(animateOut ? 0 : 1)
             .onAppear {
@@ -1057,64 +1269,117 @@ private struct BoardIntroBanner: View {
     }
 
     let currentAct: Int
-    let boardIndex: Int
+    let roundIndex: Int
     let templateDisplayName: String
     let hasStones: Bool
-    let isBoss: Bool
+    let isChallengeRound: Bool
+    let challengePrimaryText: String?
+    let challengeSecondaryLabel: String?
+    let challengeSecondaryText: String?
 
     private var badges: [String] {
         var items: [String] = ["FREE PICK"]
         if hasStones { items.append("STONES") }
-        if isBoss { items.append("BOSS") }
+        if isChallengeRound { items.append("CHALLENGE") }
         return items
     }
 
     var body: some View {
-        VStack(spacing: 8) {
-            Text("ACT \(currentAct) · BOARD \(boardIndex)")
-                .font(.parchmentRounded(size: 12, weight: .bold))
+        VStack(spacing: StitchTheme.Space._2) {
+            Text("BUCKET \(currentAct) · ROUND \(roundIndex)")
+                .font(StitchTheme.Typography.labelCaps(size: 11, weight: .bold))
                 .tracking(1.2)
-                .foregroundStyle(ParchmentTheme.Palette.slate)
+                .foregroundStyle(StitchTheme.Colors.inkSecondary)
 
             Text(templateDisplayName)
-                .font(.parchmentRounded(size: 26, weight: .heavy))
-                .foregroundStyle(ParchmentTheme.Palette.ink)
+                .font(StitchTheme.Typography.title(size: 22))
+                .foregroundStyle(StitchTheme.Colors.inkPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.78)
 
+            if let challengePrimaryText, isChallengeRound {
+                Text(challengePrimaryText)
+                    .font(StitchTheme.Typography.caption(size: 11))
+                    .foregroundStyle(StitchTheme.Colors.inkSecondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.82)
+            }
+
+            if
+                let challengeSecondaryLabel,
+                let challengeSecondaryText,
+                isChallengeRound
+            {
+                HStack(spacing: StitchTheme.Space._2) {
+                    Text(challengeSecondaryLabel)
+                        .font(StitchTheme.Typography.labelCaps(size: 9, weight: .heavy))
+                        .tracking(0.7)
+                        .foregroundStyle(challengeSecondaryLabel == "OBJECTIVE"
+                            ? ParchmentTheme.Palette.objectiveGreenText
+                            : StitchTheme.Colors.accentGold)
+                        .padding(.horizontal, StitchTheme.Space._2)
+                        .padding(.vertical, StitchTheme.Space._1)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(
+                                    challengeSecondaryLabel == "OBJECTIVE"
+                                        ? ParchmentTheme.Palette.objectiveTagFill
+                                        : StitchTheme.Colors.accentGold.opacity(0.12)
+                                )
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .stroke(
+                                            challengeSecondaryLabel == "OBJECTIVE"
+                                                ? ParchmentTheme.Palette.objectiveTagStroke
+                                                : StitchTheme.Colors.accentGold.opacity(0.28),
+                                            lineWidth: StitchTheme.Stroke.hairline
+                                        )
+                                )
+                        )
+
+                    Text(challengeSecondaryText)
+                        .font(StitchTheme.Typography.caption(size: 11))
+                        .foregroundStyle(StitchTheme.Colors.inkSecondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .minimumScaleFactor(0.82)
+                }
+            }
+
             if !badges.isEmpty {
-                HStack(spacing: 6) {
+                HStack(spacing: StitchTheme.Space._2) {
                     ForEach(badges, id: \.self) { badge in
                         Text(badge)
-                            .font(.parchmentRounded(size: 10, weight: .heavy))
+                            .font(StitchTheme.Typography.labelCaps(size: 10))
                             .tracking(0.7)
-                            .foregroundStyle(ParchmentTheme.Palette.ink)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
+                            .foregroundStyle(StitchTheme.Colors.inkPrimary)
+                            .padding(.horizontal, StitchTheme.Space._2)
+                            .padding(.vertical, StitchTheme.Space._1)
                             .background(
-                                Capsule(style: .continuous)
-                                    .fill(ParchmentTheme.Palette.white.opacity(0.9))
+                                RoundedRectangle(cornerRadius: StitchTheme.Radii.xs, style: .continuous)
+                                    .fill(StitchTheme.Colors.surfaceCard)
                                     .overlay(
-                                        Capsule(style: .continuous)
-                                            .stroke(ParchmentTheme.Palette.ink.opacity(0.3), lineWidth: 1)
+                                        RoundedRectangle(cornerRadius: StitchTheme.Radii.xs, style: .continuous)
+                                            .stroke(StitchTheme.Colors.strokeSoft, lineWidth: StitchTheme.Stroke.hairline)
                                     )
                             )
                     }
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, StitchTheme.Space._4)
+        .padding(.vertical, StitchTheme.Space._3)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(ParchmentTheme.Palette.paperBase.opacity(0.95))
+            RoundedRectangle(cornerRadius: StitchTheme.Radii.md, style: .continuous)
+                .fill(StitchTheme.Colors.surfaceCard)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(ParchmentTheme.Palette.ink.opacity(0.36), lineWidth: 1.6)
+                    RoundedRectangle(cornerRadius: StitchTheme.Radii.md, style: .continuous)
+                        .stroke(StitchTheme.Colors.strokeSoft, lineWidth: StitchTheme.Stroke.standard)
                 )
         )
-        .shadow(color: ParchmentTheme.Palette.ink.opacity(0.16), radius: 8, x: 0, y: 4)
-        .padding(.horizontal, 20)
+        .shadow(color: StitchTheme.Colors.shadowColor.opacity(0.10), radius: 8, x: 0, y: 4)
+        .padding(.horizontal, StitchTheme.Space._5)
     }
 }
 
@@ -1129,9 +1394,13 @@ private struct ShakeEffect: GeometryEffect {
     }
 }
 
-#Preview {
-    GameScreen(
-        milestoneTracker: MilestoneTracker(),
-        onQuitToMenu: {}
-    )
+struct GameScreen_Previews: PreviewProvider {
+    static var previews: some View {
+        GameScreen(
+            milestoneTracker: MilestoneTracker(),
+            playerProfile: PlayerProfile(),
+            starterPerks: [],
+            onQuitToMenu: {}
+        )
+    }
 }

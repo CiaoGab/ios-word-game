@@ -23,23 +23,23 @@ final class WordTrie {
 final class WordDictionary {
     /// 3-letter common words only (zipf >= 4.0, no abbreviations).
     private let words3Common: Set<String>
-    /// 4–8 letter words (existing common list, minus blocklist).
-    private let words4to8: Set<String>
+    /// 4-20 letter words (existing common list, minus blocklist).
+    private let words4to20: Set<String>
 
     // MARK: - Init
 
     /// Designated init for production: two separate sets, validated by length.
-    init(words3Common: Set<String>, words4to8: Set<String>) {
+    init(words3Common: Set<String>, words4to20: Set<String>) {
         self.words3Common = words3Common
-        self.words4to8 = words4to8
+        self.words4to20 = words4to20
     }
 
     /// Convenience init used in tests: merges all words into the appropriate bucket by length.
     convenience init(words: Set<String>) {
         let normalized = Set(words.map { Self.normalize($0) }.filter { !$0.isEmpty })
         let w3 = normalized.filter { $0.count == 3 }
-        let w48 = normalized.filter { (4...8).contains($0.count) }
-        self.init(words3Common: w3, words4to8: w48)
+        let w420 = normalized.filter { (4...20).contains($0.count) }
+        self.init(words3Common: w3, words4to20: w420)
     }
 
     // MARK: - Trie
@@ -47,7 +47,7 @@ final class WordDictionary {
     func buildTrie() -> WordTrie {
         let root = WordTrie()
         for word in words3Common { root.insert(word) }
-        for word in words4to8    { root.insert(word) }
+        for word in words4to20   { root.insert(word) }
         return root
     }
 
@@ -80,12 +80,12 @@ final class WordDictionary {
     }
 
     func firstWord(lengths: ClosedRange<Int> = 3...6) -> String? {
-        let all = words3Common.union(words4to8)
+        let all = words3Common.union(words4to20)
         return all.sorted().first { lengths.contains($0.count) }
     }
 
     func words(ofLength length: Int) -> [String] {
-        let source = length == 3 ? words3Common : words4to8
+        let source = length == 3 ? words3Common : words4to20
         return source.filter { $0.count == length }.sorted()
     }
 
@@ -93,26 +93,26 @@ final class WordDictionary {
 
     static func loadFromBundle(bundle: Bundle = .main) -> WordDictionary {
         let w3  = loadSet(resource: "words3_common",  bundle: bundle, expectedLengths: 3...3)
-        let w48 = loadSet(resource: "words4to6",      bundle: bundle, expectedLengths: 4...8)
+        let w420 = loadSet(resource: "words4to6",     bundle: bundle, expectedLengths: 4...20)
 
         let effective3  = w3.isEmpty  ? Set(fallbackWords.filter { $0.count == 3 }) : w3
-        let effective48 = w48.isEmpty ? Set(fallbackWords.filter { (4...8).contains($0.count) }) : w48
+        let effective420 = w420.isEmpty ? Set(fallbackWords.filter { (4...20).contains($0.count) }) : w420
 
         if w3.isEmpty {
             print("[Dictionary] words3_common.json missing or empty — using \(effective3.count) fallback 3-letter words.")
             print("[Dictionary] If missing in Xcode: select words3_common.json -> File Inspector target membership includes ios-word-game, then Build Phases -> Copy Bundle Resources.")
         }
-        if w48.isEmpty {
-            print("[Dictionary] words4to6.json missing or empty — using \(effective48.count) fallback 4-8-letter words.")
+        if w420.isEmpty {
+            print("[Dictionary] words4to6.json missing or empty — using \(effective420.count) fallback 4-20-letter words.")
         }
 
-        return WordDictionary(words3Common: effective3, words4to8: effective48)
+        return WordDictionary(words3Common: effective3, words4to20: effective420)
     }
 
     // MARK: - Private helpers
 
     private func set(forLength length: Int) -> Set<String> {
-        length == 3 ? words3Common : words4to8
+        length == 3 ? words3Common : words4to20
     }
 
     private static func loadSet(

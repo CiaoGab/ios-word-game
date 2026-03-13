@@ -1,160 +1,187 @@
 import SwiftUI
 
-struct StartScreen: View {
-    let milestoneTracker: MilestoneTracker
-    let onPlay: () -> Void
-    let onMilestones: () -> Void
+private enum StartScreenChrome {
+    static let horizontalPadding: CGFloat = StitchTheme.RuunChrome.screenHorizontalPadding
+    static let heroBottomPadding: CGFloat = 64
+    static let actionWidth: CGFloat = 320
+    static let primaryHeight: CGFloat = 60
+    static let secondaryHeight: CGFloat = StitchTheme.RuunChrome.buttonHeight
+    static let actionSpacing: CGFloat = 20
+    static let secondarySpacing: CGFloat = 16
+    static let buttonCornerRadius: CGFloat = StitchTheme.RuunChrome.buttonRadius
+    static let buttonDepth: CGFloat = StitchTheme.RuunChrome.buttonDepth
+    static let heroBlue = Color(hex: 0x1A3A5F)
+}
 
-    @State private var showSettings = false
+struct StartScreen: View {
+    let playerProfile: PlayerProfile
+    let onPlay: ([StarterPerkID]) -> Void
+    let onProfile: () -> Void
+    let onHowToPlay: () -> Void
+    let onSettings: () -> Void
+
+    @State private var showEquipScreen = false
 
     var body: some View {
         ZStack {
-            ParchmentBackdrop()
+            StitchTheme.BoardGame.canvasWarm
                 .ignoresSafeArea()
 
+            Circle()
+                .fill(StitchTheme.BoardGame.gold.opacity(0.08))
+                .frame(width: 168, height: 168)
+                .blur(radius: 28)
+                .offset(x: -132, y: -252)
+                .allowsHitTesting(false)
+
+            Circle()
+                .fill(StartScreenChrome.heroBlue.opacity(0.05))
+                .frame(width: 220, height: 220)
+                .blur(radius: 34)
+                .offset(x: 150, y: 214)
+                .allowsHitTesting(false)
+
             GeometryReader { proxy in
+                let topInset = max(24, proxy.safeAreaInsets.top + 8)
+                let bottomInset = max(36, proxy.safeAreaInsets.bottom + 20)
+
                 VStack(spacing: 0) {
-                    Spacer(minLength: max(32, proxy.size.height * 0.08))
+                    HStack {
+                        Spacer()
 
-                    // Title
-                    VStack(spacing: ParchmentTheme.Spacing.sm) {
-                        Text("WordFall")
-                            .font(.parchmentRounded(size: 52, weight: .heavy))
-                            .foregroundStyle(ParchmentTheme.Palette.ink)
-                            .rotationEffect(.degrees(-1.5))
-
-                        Text("Break locks. Build words.")
-                            .font(.parchmentRounded(size: 15, weight: .bold))
-                            .foregroundStyle(ParchmentTheme.Palette.slate)
+                        Button(action: onSettings) {
+                            RuunHeaderControl(
+                                systemImage: "gearshape",
+                                iconSize: 19,
+                                fill: StitchTheme.BoardGame.surface.opacity(0.96)
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
+                    .padding(.top, topInset)
+                    .padding(.horizontal, StartScreenChrome.horizontalPadding)
 
-                    Spacer(minLength: max(56, proxy.size.height * 0.14))
+                    Spacer(minLength: 28)
 
-                    // Main play button
-                    menuButton(
-                        "Play Run",
-                        subtitle: "15 boards · 3 acts",
-                        fill: ParchmentTheme.Palette.objectiveGreen,
-                        stroke: ParchmentTheme.Palette.objectiveGreenText,
-                        action: onPlay
-                    )
+                    VStack(spacing: 8) {
+                        HStack(spacing: 0) {
+                            Text("RU")
+                                .foregroundStyle(StitchTheme.BoardGame.gold)
+                            Text("UN")
+                                .foregroundStyle(StartScreenChrome.heroBlue)
+                        }
+                        .font(.system(size: 72, weight: .black, design: .rounded))
+                        .tracking(-3.6)
+                        .shadow(color: Color.black.opacity(0.05), radius: 1, x: 0, y: 1)
+                        .accessibilityLabel("RUUN")
 
-                    Spacer().frame(height: ParchmentTheme.Spacing.xl + 6)
+                        Capsule(style: .continuous)
+                            .fill(StitchTheme.BoardGame.gold.opacity(0.7))
+                            .frame(width: 96, height: 4)
 
-                    // Secondary row
-                    HStack(spacing: ParchmentTheme.Spacing.md) {
-                        secondaryButton(
-                            icon: "star.fill",
-                            label: "Milestones",
-                            fill: ParchmentTheme.Palette.footerYellow,
-                            stroke: ParchmentTheme.Palette.footerYellowStroke,
-                            action: onMilestones
-                        )
-
-                        secondaryButton(
-                            icon: "gearshape.fill",
-                            label: "Settings",
-                            fill: ParchmentTheme.Palette.slate,
-                            stroke: ParchmentTheme.Palette.ink.opacity(0.45),
-                            action: { showSettings = true }
-                        )
+                        Text("THE STRATEGY RACE")
+                            .font(StitchTheme.Typography.labelCaps(size: 14, weight: .heavy))
+                            .tracking(4.2)
+                            .foregroundStyle(StitchTheme.BoardGame.textMuted)
+                            .padding(.top, 16)
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.bottom, StartScreenChrome.heroBottomPadding)
 
-                    Spacer(minLength: max(ParchmentTheme.Spacing.xxl + 6, proxy.safeAreaInsets.bottom + 22))
+                    VStack(spacing: StartScreenChrome.actionSpacing) {
+                        Button(action: { showEquipScreen = true }) {
+                            Text("START RUN")
+                                .font(StitchTheme.Typography.subtitle(size: 20, weight: .heavy))
+                                .tracking(1.2)
+                                .foregroundStyle(StitchTheme.BoardGame.textPrimary)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: StartScreenChrome.primaryHeight)
+                                .background(
+                                    StitchRoundedSurface(
+                                        fill: StitchTheme.BoardGame.gold,
+                                        border: StitchTheme.BoardGame.outline,
+                                        shadow: StitchTheme.BoardGame.goldStrong,
+                                        cornerRadius: StartScreenChrome.buttonCornerRadius,
+                                        lineWidth: StitchTheme.RuunChrome.buttonLineWidth,
+                                        depth: StartScreenChrome.buttonDepth
+                                    )
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.bottom, StartScreenChrome.buttonDepth)
+
+                        VStack(spacing: StartScreenChrome.secondarySpacing) {
+                            homeSecondaryButton(
+                                title: "Profile",
+                                systemImage: "person.crop.circle",
+                                action: onProfile
+                            )
+                            homeSecondaryButton(
+                                title: "How to Play",
+                                systemImage: "questionmark.circle",
+                                action: onHowToPlay
+                            )
+                        }
+                    }
+                    .frame(maxWidth: StartScreenChrome.actionWidth)
+                    .frame(maxWidth: .infinity)
+
+                    Spacer(minLength: bottomInset)
                 }
-                .padding(.horizontal, ParchmentTheme.Spacing.xl)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .sheet(isPresented: $showSettings) {
-            SettingsView()
-                .environmentObject(SettingsStore.shared)
+        .sheet(isPresented: $showEquipScreen) {
+            PreRunEquipView(
+                playerProfile: playerProfile,
+                initialSelection: playerProfile.equippedStarterPerks,
+                onCancel: { showEquipScreen = false },
+                onStart: { perks in
+                    playerProfile.setEquippedStarterPerks(perks)
+                    showEquipScreen = false
+                    onPlay(perks)
+                }
+            )
         }
     }
 
-    // MARK: - Button builders
-
-    private func menuButton(
-        _ title: String,
-        subtitle: String,
-        fill: Color,
-        stroke: Color,
-        action: @escaping () -> Void
-    ) -> some View {
+    private func homeSecondaryButton(title: String, systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 3) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 17, weight: .black))
+                    .foregroundStyle(StitchTheme.BoardGame.textPrimary)
+
                 Text(title)
-                    .font(.parchmentRounded(size: 22, weight: .heavy))
-                Text(subtitle)
-                    .font(.parchmentRounded(size: 12, weight: .bold))
-                    .opacity(0.8)
+                    .font(StitchTheme.Typography.body(size: 16, weight: .heavy))
+                    .foregroundStyle(StitchTheme.BoardGame.textPrimary)
             }
-            .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 20)
-            .background(
-                RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button, style: .continuous)
-                    .fill(fill)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button, style: .continuous)
-                            .stroke(stroke, lineWidth: ParchmentTheme.Stroke.button)
+            .frame(height: StartScreenChrome.secondaryHeight)
+                .background(
+                    StitchRoundedSurface(
+                        fill: StitchTheme.BoardGame.surface,
+                        border: StitchTheme.BoardGame.outline,
+                        shadow: StitchTheme.BoardGame.outline,
+                        cornerRadius: StartScreenChrome.buttonCornerRadius,
+                        lineWidth: StitchTheme.RuunChrome.buttonLineWidth,
+                        depth: StartScreenChrome.buttonDepth
                     )
-            )
-            .shadow(
-                color: ParchmentTheme.Palette.ink.opacity(ParchmentTheme.Shadow.button.opacity),
-                radius: ParchmentTheme.Shadow.button.radius,
-                x: ParchmentTheme.Shadow.button.x,
-                y: ParchmentTheme.Shadow.button.y
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button - 16, style: .continuous)
-                    .fill(Color.white.opacity(0.12))
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 4.5)
-            )
+                )
         }
         .buttonStyle(.plain)
-    }
-
-    private func secondaryButton(
-        icon: String,
-        label: String,
-        fill: Color,
-        stroke: Color,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: ParchmentTheme.Spacing.sm) {
-                Image(systemName: icon)
-                    .font(.system(size: 15, weight: .bold))
-                Text(label)
-                    .font(.parchmentRounded(size: 16, weight: .heavy))
-            }
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 16)
-            .background(
-                RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button, style: .continuous)
-                    .fill(fill)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: ParchmentTheme.Radius.button, style: .continuous)
-                            .stroke(stroke, lineWidth: ParchmentTheme.Stroke.button)
-                    )
-            )
-            .shadow(
-                color: ParchmentTheme.Palette.ink.opacity(ParchmentTheme.Shadow.button.opacity),
-                radius: ParchmentTheme.Shadow.button.radius,
-                x: ParchmentTheme.Shadow.button.x,
-                y: ParchmentTheme.Shadow.button.y
-            )
-        }
-        .buttonStyle(.plain)
+        .padding(.bottom, StartScreenChrome.buttonDepth)
     }
 }
 
-#Preview {
-    StartScreen(
-        milestoneTracker: MilestoneTracker(),
-        onPlay: {},
-        onMilestones: {}
-    )
+struct StartScreen_Previews: PreviewProvider {
+    static var previews: some View {
+        StartScreen(
+            playerProfile: PlayerProfile(),
+            onPlay: { _ in },
+            onProfile: {},
+            onHowToPlay: {},
+            onSettings: {}
+        )
+    }
 }

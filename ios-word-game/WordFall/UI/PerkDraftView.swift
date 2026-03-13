@@ -1,7 +1,21 @@
 import SwiftUI
 
 struct PerkDraftView: View {
-    let boardIndex: Int
+    private enum DraftChrome {
+        static let panelWidth: CGFloat = 430
+        static let panelCornerRadius: CGFloat = StitchTheme.RuunChrome.panelRadius
+        static let panelBorder: CGFloat = StitchTheme.RuunChrome.panelLineWidth
+        static let panelDepth: CGFloat = StitchTheme.RuunChrome.panelDepth
+        static let cardCornerRadius: CGFloat = StitchTheme.RuunChrome.cardRadius
+        static let cardBorder: CGFloat = StitchTheme.RuunChrome.cardLineWidth
+        static let cardDepth: CGFloat = StitchTheme.RuunChrome.cardDepth
+        static let cardSpacing: CGFloat = 16
+        static let cardPadding: CGFloat = 16
+        static let cardMinHeight: CGFloat = 172
+        static let actionHeight: CGFloat = 44
+    }
+
+    let roundIndex: Int
     let options: [Perk]
     let onSelect: (PerkID) -> Void
 
@@ -10,43 +24,76 @@ struct PerkDraftView: View {
     @State private var selectionFlash: Bool = false
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.55)
-                .ignoresSafeArea()
+        GeometryReader { proxy in
+            let panelWidth = min(proxy.size.width - 32, DraftChrome.panelWidth)
+            let panelMaxHeight = min(proxy.size.height - 32, 760)
 
-            VStack(spacing: ParchmentTheme.Spacing.xl) {
-                VStack(spacing: ParchmentTheme.Spacing.xs) {
-                    Text("Board \(boardIndex) Cleared")
-                        .font(.parchmentRounded(size: 29, weight: .heavy))
-                        .foregroundStyle(ParchmentTheme.Palette.objectiveGreenText)
-                    Text("Pick a modifier to carry forward")
-                        .font(.parchmentRounded(size: 15, weight: .bold))
-                        .foregroundStyle(ParchmentTheme.Palette.slate)
-                }
+            ZStack {
+                StitchTheme.Colors.backdrop
+                    .ignoresSafeArea()
 
-                VStack(spacing: ParchmentOverlayStyle.Tunables.cardSpacing) {
-                    ForEach(Array(options.prefix(3).enumerated()), id: \.element.id) { index, perk in
-                        perkCard(perk)
-                            .rotationEffect(.degrees(cardTilt(index)))
-                    }
-                }
-            }
-            .padding(ParchmentTheme.Spacing.xl)
-            .background(
-                RoundedRectangle(cornerRadius: ParchmentOverlayStyle.Radius.panel, style: .continuous)
-                    .fill(ParchmentTheme.Palette.paperBase)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: ParchmentOverlayStyle.Radius.panel, style: .continuous)
-                            .stroke(ParchmentTheme.Palette.ink.opacity(0.88), lineWidth: ParchmentOverlayStyle.Stroke.panel)
+                ZStack {
+                    StitchRoundedSurface(
+                        fill: StitchTheme.BoardGame.canvasWarm,
+                        border: StitchTheme.BoardGame.outline,
+                        shadow: StitchTheme.BoardGame.outline,
+                        cornerRadius: DraftChrome.panelCornerRadius,
+                        lineWidth: DraftChrome.panelBorder,
+                        depth: DraftChrome.panelDepth
                     )
-            )
-            .shadow(
-                color: ParchmentTheme.Palette.ink.opacity(0.18),
-                radius: ParchmentOverlayStyle.Tunables.panelShadowRadius,
-                x: 0,
-                y: ParchmentOverlayStyle.Tunables.panelShadowY
-            )
-            .padding(.horizontal, ParchmentTheme.Spacing.xl)
+
+                    VStack(spacing: 0) {
+                        headerSection
+
+                        ScrollView(showsIndicators: false) {
+                            VStack(spacing: DraftChrome.cardSpacing) {
+                                ForEach(Array(options.prefix(3)), id: \.id) { perk in
+                                    perkCard(perk)
+                                }
+                            }
+                            .padding(16)
+                        }
+                    }
+                    .clipShape(
+                        RoundedRectangle(cornerRadius: DraftChrome.panelCornerRadius, style: .continuous)
+                    )
+                }
+                .frame(width: panelWidth)
+                .frame(maxHeight: panelMaxHeight)
+                .padding(.bottom, DraftChrome.panelDepth)
+                .padding(.horizontal, 16)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var headerSection: some View {
+        VStack(spacing: 6) {
+            Text("ROUND \(String(format: "%02d", roundIndex)) CLEARED")
+                .font(StitchTheme.Typography.labelCaps(size: 12, weight: .heavy))
+                .tracking(1.2)
+                .foregroundStyle(StitchTheme.BoardGame.textSecondary.opacity(0.9))
+
+            Text("ROUND CLEARED")
+                .font(StitchTheme.Typography.valueHero(size: 28, weight: .black))
+                .tracking(-1)
+                .foregroundStyle(StitchTheme.BoardGame.textPrimary)
+                .minimumScaleFactor(0.8)
+
+            Text("CHOOSE A PERK")
+                .font(StitchTheme.Typography.labelCaps(size: 14, weight: .heavy))
+                .tracking(1.1)
+                .foregroundStyle(StitchTheme.BoardGame.goldStrong)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24)
+        .padding(.top, 22)
+        .padding(.bottom, 18)
+        .background(StitchTheme.BoardGame.canvasWarm)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(StitchTheme.BoardGame.outline.opacity(0.18))
+                .frame(height: 2)
         }
     }
 
@@ -59,83 +106,132 @@ struct PerkDraftView: View {
         return Button {
             selectPerk(perk.id)
         } label: {
-            VStack(alignment: .leading, spacing: ParchmentTheme.Spacing.xs) {
-                HStack(alignment: .top, spacing: ParchmentTheme.Spacing.sm) {
-                    Text(perk.name)
-                        .font(.parchmentRounded(size: 22, weight: .heavy))
-                        .foregroundStyle(ParchmentTheme.Palette.ink)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.8)
+            ZStack(alignment: .topTrailing) {
+                StitchRoundedSurface(
+                    fill: StitchTheme.BoardGame.surface,
+                    border: isSelected ? StitchTheme.BoardGame.gold : StitchTheme.BoardGame.outline,
+                    shadow: isSelected ? StitchTheme.BoardGame.gold : StitchTheme.BoardGame.outline,
+                    cornerRadius: DraftChrome.cardCornerRadius,
+                    lineWidth: DraftChrome.cardBorder,
+                    depth: DraftChrome.cardDepth
+                )
 
-                    Spacer(minLength: 8)
+                RoundedRectangle(cornerRadius: DraftChrome.cardCornerRadius, style: .continuous)
+                    .fill(StitchTheme.BoardGame.gold.opacity(isSelected && selectionFlash ? 0.12 : 0))
 
-                    Text(rarity.rawValue)
-                        .font(.parchmentRounded(size: 11, weight: .heavy))
-                        .tracking(0.8)
-                        .foregroundStyle(rarityColors.text)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(rarityColors.fill)
-                                .overlay(
-                                    Capsule(style: .continuous)
-                                        .stroke(rarityColors.stroke, lineWidth: ParchmentOverlayStyle.Stroke.chip)
-                                )
-                        )
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(alignment: .top, spacing: 12) {
+                        perkIconChip(perk: perk, isSelected: isSelected)
+
+                        Spacer(minLength: 8)
+
+                        rarityBadge(title: rarity.rawValue, colors: rarityColors)
+                    }
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(perk.name.uppercased())
+                            .font(StitchTheme.Typography.subtitle(size: 17, weight: .black))
+                            .foregroundStyle(StitchTheme.BoardGame.textPrimary)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.86)
+
+                        Text(perk.description)
+                            .font(StitchTheme.Typography.body(size: 14, weight: .medium))
+                            .foregroundStyle(StitchTheme.BoardGame.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .lineSpacing(1)
+                    }
+
+                    selectionBar(isSelected: isSelected)
                 }
+                .frame(maxWidth: .infinity, minHeight: DraftChrome.cardMinHeight, alignment: .topLeading)
+                .padding(DraftChrome.cardPadding)
 
-                Text(perk.description)
-                    .font(.parchmentRounded(size: 14, weight: .bold))
-                    .foregroundStyle(ParchmentTheme.Palette.slate)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 2)
+                if isSelected {
+                    activeBadge
+                        .offset(x: 10, y: -12)
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, ParchmentTheme.Spacing.lg)
-            .padding(.vertical, ParchmentTheme.Spacing.md)
-            .background(
-                RoundedRectangle(cornerRadius: ParchmentOverlayStyle.Radius.card, style: .continuous)
-                    .fill(ParchmentTheme.Palette.paperDust.opacity(0.42))
-                    .offset(y: 2)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: ParchmentOverlayStyle.Radius.card, style: .continuous)
-                            .fill(ParchmentTheme.Palette.white.opacity(0.96))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: ParchmentOverlayStyle.Radius.card, style: .continuous)
-                            .stroke(
-                                isSelected ? ParchmentTheme.Palette.objectiveGreenText : ParchmentTheme.Palette.ink.opacity(0.85),
-                                lineWidth: ParchmentOverlayStyle.Stroke.card
-                            )
-                    )
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: ParchmentOverlayStyle.Radius.card, style: .continuous)
-                    .fill(ParchmentTheme.Palette.objectiveGreen.opacity(isSelected && selectionFlash ? 0.22 : 0))
-            }
-            .shadow(
-                color: ParchmentTheme.Palette.ink.opacity(0.12),
-                radius: ParchmentOverlayStyle.Tunables.cardShadowRadius,
-                x: 0,
-                y: ParchmentOverlayStyle.Tunables.cardShadowY
-            )
+            .padding(.bottom, DraftChrome.cardDepth)
             .opacity(shouldDim ? 0.55 : 1)
             .saturation(shouldDim ? 0.7 : 1)
             .animation(.easeOut(duration: 0.15), value: shouldDim)
-            .animation(.easeOut(duration: ParchmentOverlayStyle.Tunables.cardSelectionFlashDuration), value: selectionFlash)
+            .animation(.easeOut(duration: 0.14), value: selectionFlash)
         }
         .buttonStyle(ParchmentPressStyle())
         .disabled(isProcessingSelection)
     }
 
-    private func cardTilt(_ index: Int) -> Double {
-        switch index {
-        case 0: return -0.8
-        case 1: return 0.6
-        case 2: return -0.4
-        default: return 0
+    private func perkIconChip(perk: Perk, isSelected: Bool) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: StitchTheme.RuunChrome.iconChipRadius, style: .continuous)
+                .fill(isSelected ? StitchTheme.BoardGame.gold.opacity(0.2) : StitchTheme.BoardGame.surfaceWarm)
+
+            RoundedRectangle(cornerRadius: StitchTheme.RuunChrome.iconChipRadius, style: .continuous)
+                .stroke(StitchTheme.BoardGame.outline, lineWidth: StitchTheme.RuunChrome.iconChipLineWidth)
+
+            Image(systemName: perk.symbolName)
+                .font(.system(size: 18, weight: .black))
+                .foregroundStyle(StitchTheme.BoardGame.textPrimary)
         }
+        .frame(width: StitchTheme.RuunChrome.iconChipSize, height: StitchTheme.RuunChrome.iconChipSize)
+    }
+
+    private func rarityBadge(title: String, colors: (fill: Color, stroke: Color, text: Color)) -> some View {
+        Text(title)
+            .font(StitchTheme.Typography.labelCaps(size: 10, weight: .heavy))
+            .tracking(1.1)
+            .foregroundStyle(colors.text)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(colors.fill)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .stroke(colors.stroke, lineWidth: StitchTheme.RuunChrome.secondaryCardLineWidth)
+                    )
+            )
+    }
+
+    private func selectionBar(isSelected: Bool) -> some View {
+        HStack(spacing: 8) {
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 12, weight: .black))
+            }
+
+            Text(isSelected ? "SELECTED" : "SELECT")
+                .font(StitchTheme.Typography.body(size: 14, weight: .heavy))
+                .tracking(0.3)
+        }
+        .foregroundStyle(StitchTheme.BoardGame.textPrimary)
+        .frame(maxWidth: .infinity, minHeight: DraftChrome.actionHeight)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(isSelected ? StitchTheme.BoardGame.gold : StitchTheme.BoardGame.surfaceWarm)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(StitchTheme.BoardGame.outline, lineWidth: StitchTheme.RuunChrome.buttonLineWidth)
+                )
+        )
+    }
+
+    private var activeBadge: some View {
+        Text("ACTIVE")
+            .font(StitchTheme.Typography.labelCaps(size: 10, weight: .heavy))
+            .tracking(0.4)
+            .foregroundStyle(StitchTheme.BoardGame.textPrimary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(StitchTheme.BoardGame.gold)
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(StitchTheme.BoardGame.outline, lineWidth: StitchTheme.RuunChrome.iconChipLineWidth)
+                    )
+            )
     }
 
     private func selectPerk(_ perkID: PerkID) {
@@ -145,15 +241,14 @@ struct PerkDraftView: View {
         selectionFlash = false
         Haptics.selectionStep()
 
-        withAnimation(.easeOut(duration: ParchmentOverlayStyle.Tunables.cardSelectionFlashDuration)) {
+        withAnimation(.easeOut(duration: 0.14)) {
             selectionFlash = true
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + ParchmentOverlayStyle.Tunables.cardSelectionCommitDelay) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
             onSelect(perkID)
         }
     }
-
 }
 
 private extension ModifierRarity {
@@ -161,40 +256,89 @@ private extension ModifierRarity {
         switch self {
         case .common:
             return (
-                fill: ParchmentTheme.Palette.footerBlue.opacity(0.16),
-                stroke: ParchmentTheme.Palette.footerBlueStroke.opacity(0.7),
-                text: ParchmentTheme.Palette.footerBlueStroke
+                fill: StitchTheme.BoardGame.surfaceWarm,
+                stroke: StitchTheme.BoardGame.outline.opacity(0.12),
+                text: StitchTheme.BoardGame.textSecondary.opacity(0.7)
             )
         case .uncommon:
             return (
                 fill: ParchmentTheme.Palette.objectiveTagFill,
-                stroke: ParchmentTheme.Palette.objectiveGreen.opacity(0.8),
+                stroke: ParchmentTheme.Palette.objectiveGreen.opacity(0.35),
                 text: ParchmentTheme.Palette.objectiveGreenText
             )
         case .rare:
             return (
-                fill: ParchmentTheme.Palette.levelYellow.opacity(0.72),
-                stroke: ParchmentTheme.Palette.footerYellowStroke.opacity(0.85),
-                text: ParchmentTheme.Palette.footerYellowStroke
+                fill: StitchTheme.BoardGame.goldWash,
+                stroke: StitchTheme.BoardGame.gold,
+                text: StitchTheme.BoardGame.goldStrong
             )
         case .epic:
             return (
-                fill: ParchmentTheme.Palette.footerPurple.opacity(0.24),
-                stroke: ParchmentTheme.Palette.footerPurpleStroke.opacity(0.9),
+                fill: ParchmentTheme.Palette.footerPurple.opacity(0.15),
+                stroke: ParchmentTheme.Palette.footerPurpleStroke.opacity(0.5),
                 text: ParchmentTheme.Palette.footerPurpleStroke
             )
         }
     }
 }
 
-#Preview {
-    PerkDraftView(
-        boardIndex: 2,
-        options: [
-            PerkID.lockRefund.definition,
-            PerkID.freshSpark.definition,
-            PerkID.longBreaker.definition
-        ],
-        onSelect: { _ in }
-    )
+private extension Modifier {
+    var symbolName: String {
+        switch id {
+        case .lockRefund:
+            return "lock.open.fill"
+        case .freshSpark:
+            return "sparkles"
+        case .longBreaker:
+            return "hammer.fill"
+        case .straightShooter:
+            return "scope"
+        case .freeHint:
+            return "lightbulb.fill"
+        case .freeUndo:
+            return "arrow.uturn.backward.circle.fill"
+        case .rareRelief:
+            return "wand.and.stars"
+        case .consonantCrunch:
+            return "textformat"
+        case .vowelBloom:
+            return "drop.fill"
+        case .tightGloves:
+            return "figure.run"
+        case .lockSplash:
+            return "bolt.fill"
+        case .bigGame:
+            return "crown.fill"
+        case .vowelBloomPlus:
+            return "chart.bar.fill"
+        case .overclockedBoots:
+            return "bolt.circle.fill"
+        case .austerityPact:
+            return "scalemass.fill"
+        case .wildcardSmith:
+            return "wand.and.stars"
+        case .salvageRights:
+            return "shippingbox.fill"
+        case .bossHunter:
+            return "flag.checkered"
+        case .titanTribute:
+            return "trophy.fill"
+        case .echoChamber:
+            return "square.stack.3d.up.fill"
+        }
+    }
+}
+
+struct PerkDraftView_Previews: PreviewProvider {
+    static var previews: some View {
+        PerkDraftView(
+            roundIndex: 2,
+            options: [
+                PerkID.lockRefund.definition,
+                PerkID.freshSpark.definition,
+                PerkID.longBreaker.definition
+            ],
+            onSelect: { _ in }
+        )
+    }
 }

@@ -4,7 +4,7 @@ WordFall dictionary generator.
 
 Produces two JSON files for the iOS app:
   words3_common.json  – common 3-letter English words (zipf >= 4.0, no abbrevs)
-  words4to6.json      – 4-6 letter words (existing common list, no blocklist entries)
+  words4to6.json      – 4-20 letter words from a broad English vocabulary
 
 Requirements:
   pip install wordfreq
@@ -18,7 +18,7 @@ Output goes to:
 """
 
 import json
-import os
+import pathlib
 import re
 import sys
 
@@ -29,46 +29,44 @@ except ImportError:
     sys.exit(1)
 
 # ---------------------------------------------------------------------------
-# Paths
+# Paths  (use pathlib.resolve() so the script works regardless of CWD)
 # ---------------------------------------------------------------------------
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT   = os.path.dirname(SCRIPT_DIR)
-RESOURCES   = os.path.join(REPO_ROOT, "ios-word-game", "ios-word-game", "WordFall", "Resources")
-SOURCE_JSON = os.path.join(RESOURCES, "words_3_6.json")
-BLOCKLIST   = os.path.join(RESOURCES, "words_blocklist.txt")
-BLOCKLIST_ALT = os.path.join(
-    REPO_ROOT, "ios-word-game", "WordFall", "Resources", "words_blocklist.txt"
-)
-OUT_3       = os.path.join(RESOURCES, "words3_common.json")
-OUT_4TO6    = os.path.join(RESOURCES, "words4to6.json")
+_SCRIPT   = pathlib.Path(__file__).resolve()
+RESOURCES = _SCRIPT.parent.parent / "ios-word-game" / "WordFall" / "Resources"
+BLOCKLIST = RESOURCES / "words_blocklist.txt"
+OUT_3     = RESOURCES / "words3_common.json"
+OUT_4TO20 = RESOURCES / "words4to6.json"   # filename kept for app compatibility
 
 # ---------------------------------------------------------------------------
-# 3-letter words: vowel-free allowlist (short common words spelled without
-# standard vowels that are clearly real English words, not abbreviations).
+# 3-letter words: allowlist of vowel-free words that are clearly real English
 # ---------------------------------------------------------------------------
 VOWEL_FREE_ALLOWLIST: set[str] = {
     "gym", "sky", "why", "try", "fly", "cry", "dry", "fry", "pry",
-    "sly", "spy", "shy", "ply", "sty", "wry", "thy", "nth", "psych",
-    "gym", "gyn", "crypt",  # keep crypt but it's 5 letters – harmless
+    "sly", "spy", "shy", "ply", "sty", "wry", "thy", "nth",
 }
 
-# Standard vowels
 VOWELS = set("aeiou")
 
-ZIPF_MIN = 4.0
+ZIPF_MIN_3 = 4.0
+
+# Number of top English words to pull from wordfreq.
+# 500k covers common through moderately rare words (zipf >= ~1.5), capturing
+# inflected forms like "pastels", "quickly", "twisted", "playing", "flowers".
+TOP_N = 500_000
 
 
-def load_blocklist(path: str) -> set[str]:
+def load_blocklist(path: pathlib.Path) -> set[str]:
     blocked: set[str] = set()
-    if not os.path.exists(path):
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
         print(f"Warning: blocklist not found at {path}", file=sys.stderr)
         return blocked
-    with open(path) as f:
-        for line in f:
-            line = line.strip().lower()
-            if not line or line.startswith("#"):
-                continue
-            blocked.add(line)
+    for line in text.splitlines():
+        line = line.strip().lower()
+        if not line or line.startswith("#"):
+            continue
+        blocked.add(line)
     return blocked
 
 
@@ -77,23 +75,19 @@ def has_vowel(word: str) -> bool:
 
 
 def is_valid_3letter(word: str, blocked: set[str]) -> bool:
-    """Return True if word should be included in the 3-letter common set."""
     if len(word) != 3:
         return False
     if word in blocked:
         return False
-    # Must have a vowel OR be in the explicit allowlist.
     if not has_vowel(word) and word not in VOWEL_FREE_ALLOWLIST:
         return False
-    # Must meet frequency threshold.
     z = zipf_frequency(word, "en")
-    return z >= ZIPF_MIN
+    return z >= ZIPF_MIN_3
 
 
-def is_valid_4to6(word: str, blocked: set[str]) -> bool:
-    """Return True if word should be included in the 4-6 letter set."""
+def is_valid_4to20(word: str, blocked: set[str]) -> bool:
     n = len(word)
-    if n < 4 or n > 6:
+    if n < 4 or n > 20:
         return False
     return word not in blocked
 
@@ -103,64 +97,65 @@ def normalize(word: str) -> str:
 
 
 def main() -> None:
-    # --- Load source words ---
-    if not os.path.exists(SOURCE_JSON):
-        print(f"ERROR: source file not found: {SOURCE_JSON}", file=sys.stderr)
-        sys.exit(1)
-
-    with open(SOURCE_JSON) as f:
-        raw_words: list[str] = json.load(f)
-
-    words = [normalize(w) for w in raw_words]
-    words = [w for w in words if re.fullmatch(r"[a-z]+", w)]
-
     blocked = load_blocklist(BLOCKLIST)
     print(f"Blocklist entries: {len(blocked)}")
 
-    # --- 3-letter words ---
-    # Strategy: take the union of:
-    #   (a) existing 3-letter words that pass filters
-    #   (b) any extra high-frequency 3-letter words from wordfreq not in source
-    source_3 = {w for w in words if len(w) == 3}
-
-    common3: list[str] = []
-    for w in sorted(source_3):
-        if is_valid_3letter(w, blocked):
-            common3.append(w)
-
-    # Also scan wordfreq's top English words for any 3-letter words we missed.
+    # Pull a broad English vocabulary from wordfreq.
+    print(f"Fetching top {TOP_N:,} English words from wordfreq (this may take a moment)...")
     try:
-        top_words = top_n_list("en", 50_000, wordlist="large")
-        for w in top_words:
-            w = normalize(w)
-            if len(w) == 3 and w not in source_3 and is_valid_3letter(w, blocked):
-                common3.append(w)
+        raw_top = top_n_list("en", TOP_N, wordlist="large")
     except Exception as e:
-        print(f"Warning: top_n_list failed ({e}); skipping supplemental scan", file=sys.stderr)
+        print(f"ERROR: top_n_list failed: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    common3 = sorted(set(common3))
+    # Normalize and keep only pure alpha words.
+    all_words: list[str] = []
+    for w in raw_top:
+        w = normalize(w)
+        if re.fullmatch(r"[a-z]+", w):
+            all_words.append(w)
 
-    # --- 4-6 letter words ---
-    words4to6 = sorted({w for w in words if is_valid_4to6(w, blocked)})
+    print(f"  {len(all_words):,} alpha words after normalization")
+
+    # --- 3-letter common words ---
+    common3: list[str] = sorted(
+        {w for w in all_words if is_valid_3letter(w, blocked)}
+    )
+
+    # --- 4-20 letter words ---
+    words4to20: list[str] = sorted(
+        {w for w in all_words if is_valid_4to20(w, blocked)}
+    )
 
     # --- Write outputs ---
-    os.makedirs(RESOURCES, exist_ok=True)
+    RESOURCES.mkdir(parents=True, exist_ok=True)
 
-    with open(OUT_3, "w") as f:
-        json.dump(common3, f, ensure_ascii=True)
-    print(f"Wrote {len(common3)} words  -> {OUT_3}")
+    OUT_3.write_text(json.dumps(common3, ensure_ascii=True), encoding="utf-8")
+    print(f"Wrote {len(common3):,} words  -> {OUT_3}")
 
-    with open(OUT_4TO6, "w") as f:
-        json.dump(words4to6, f, ensure_ascii=True)
-    print(f"Wrote {len(words4to6)} words -> {OUT_4TO6}")
+    OUT_4TO20.write_text(json.dumps(words4to20, ensure_ascii=True), encoding="utf-8")
+    print(f"Wrote {len(words4to20):,} words -> {OUT_4TO20}")
 
-    # --- Verification ---
-    print("\n-- Verification --")
-    for check_word in ["ekg", "emg", "gme", "cat", "dog", "the", "and"]:
-        in3 = check_word in common3
-        in46 = check_word in words4to6
-        lbl = "3-common" if in3 else ("4-6" if in46 else "REJECTED")
-        print(f"  {check_word!r:8s} -> {lbl}")
+    # --- Length distribution ---
+    print("\n-- Length distribution (4+ letter words) --")
+    lengths: dict[int, int] = {}
+    for w in words4to20:
+        lengths[len(w)] = lengths.get(len(w), 0) + 1
+    for length in sorted(lengths):
+        print(f"  {length:2d} letters: {lengths[length]:,}")
+
+    # --- Spot-check ---
+    set3   = set(common3)
+    set420 = set(words4to20)
+    print("\n-- Spot-check --")
+    checks = [
+        "ekg", "emg", "gme", "cat", "dog", "the", "and",
+        "pastels", "quickly", "twisted", "playing", "flowers", "painted",
+        "started", "garden", "words", "beautiful", "complicated",
+    ]
+    for word in checks:
+        lbl = "3-common" if word in set3 else ("4-20" if word in set420 else "REJECTED")
+        print(f"  {word!r:14s} -> {lbl}")
 
 
 if __name__ == "__main__":

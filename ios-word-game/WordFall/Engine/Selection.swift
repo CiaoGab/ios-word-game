@@ -7,7 +7,7 @@ enum Selection {
         (1, 0)
     ]
 
-    static func lineIndices(from start: Int, to end: Int, rows: Int, cols: Int, maxLength: Int = 6) -> [Int] {
+    static func lineIndices(from start: Int, to end: Int, rows: Int, cols: Int, maxLength: Int = Resolver.maxWordLen) -> [Int] {
         guard
             (0..<(rows * cols)).contains(start),
             (0..<(rows * cols)).contains(end)
@@ -49,7 +49,7 @@ enum Selection {
         _ indices: [Int],
         rows: Int,
         cols: Int,
-        allowedLengths: ClosedRange<Int> = 4...6
+        allowedLengths: ClosedRange<Int> = Resolver.minWordLen...Resolver.maxWordLen
     ) -> Bool {
         guard allowedLengths.contains(indices.count), Set(indices).count == indices.count else {
             return false

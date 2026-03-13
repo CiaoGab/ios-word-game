@@ -6,6 +6,7 @@ final class TileNode: SKShapeNode {
     private let letterLabel: SKLabelNode
     private let valueShadowLabel: SKLabelNode
     private let valueLabel: SKLabelNode
+    private let valueBackgroundNode: SKShapeNode
     private let depthNode: SKShapeNode
     private let badgeNode: SKShapeNode
     private let badgeLabel: SKLabelNode
@@ -27,8 +28,9 @@ final class TileNode: SKShapeNode {
         self.infusion = tile.infusion
 
         letterLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
-        valueShadowLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
-        valueLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+        valueShadowLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+        valueLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+        valueBackgroundNode = SKShapeNode()
         depthNode = SKShapeNode()
         badgeNode = SKShapeNode()
         badgeLabel = SKLabelNode(fontNamed: "AvenirNext-Heavy")
@@ -106,20 +108,36 @@ final class TileNode: SKShapeNode {
         addChild(letterLabel)
 
         let pointText = "\(LetterValues.value(for: tile.letter))"
+        let valueCenter = CGPoint(x: size * 0.33, y: -size * 0.35)
+        let chipW = max(22, size * 0.46)
+        let chipH = max(15, size * 0.30)
+
+        valueBackgroundNode.path = CGPath(
+            roundedRect: CGRect(x: -chipW / 2, y: -chipH / 2, width: chipW, height: chipH),
+            cornerWidth: chipH * 0.5,
+            cornerHeight: chipH * 0.5,
+            transform: nil
+        )
+        valueBackgroundNode.position = valueCenter
+        valueBackgroundNode.fillColor = ParchmentTheme.Palette.tileValueShadow
+        valueBackgroundNode.strokeColor = ParchmentTheme.Palette.tileStroke.withAlphaComponent(0.55)
+        valueBackgroundNode.lineWidth = 1.2
+        valueBackgroundNode.zPosition = 1.6
+        addChild(valueBackgroundNode)
 
         valueShadowLabel.text = pointText
-        valueShadowLabel.fontSize = max(9, size * 0.215)
+        valueShadowLabel.fontSize = max(11, size * 0.265)
         valueShadowLabel.verticalAlignmentMode = .center
         valueShadowLabel.horizontalAlignmentMode = .center
-        valueShadowLabel.position = CGPoint(x: size * 0.348, y: -size * 0.372)
+        valueShadowLabel.position = CGPoint(x: size * 0.338, y: -size * 0.362)
         valueShadowLabel.zPosition = 1.8
         addChild(valueShadowLabel)
 
         valueLabel.text = pointText
-        valueLabel.fontSize = max(9, size * 0.215)
+        valueLabel.fontSize = max(11, size * 0.265)
         valueLabel.verticalAlignmentMode = .center
         valueLabel.horizontalAlignmentMode = .center
-        valueLabel.position = CGPoint(x: size * 0.34, y: -size * 0.36)
+        valueLabel.position = CGPoint(x: size * 0.33, y: -size * 0.35)
         valueLabel.zPosition = 2
         addChild(valueLabel)
 
@@ -239,11 +257,13 @@ final class TileNode: SKShapeNode {
             letterLabel.isHidden = true
             valueLabel.isHidden = true
             valueShadowLabel.isHidden = true
+            valueBackgroundNode.isHidden = true
             badgeNode.isHidden = true
             hideInfusionAccent()
             return
         } else {
             lineWidth = ParchmentTheme.Stroke.tile
+            valueBackgroundNode.isHidden = false
         }
 
         if isMatchedState {
@@ -255,10 +275,15 @@ final class TileNode: SKShapeNode {
                 shadow: ParchmentTheme.Palette.tileValueShadow.withAlphaComponent(0.68)
             )
             depthNode.fillColor = SKColor(red: 0.94, green: 0.69, blue: 0.25, alpha: 1.0)
+            valueBackgroundNode.fillColor = ParchmentTheme.Palette.tileValueShadow.withAlphaComponent(0.7)
+            valueBackgroundNode.strokeColor = ParchmentTheme.Palette.tileMatchStroke.withAlphaComponent(0.5)
             badgeNode.isHidden = true
             hideInfusionAccent()
             return
         }
+
+        valueBackgroundNode.fillColor = ParchmentTheme.Palette.tileValueShadow
+        valueBackgroundNode.strokeColor = ParchmentTheme.Palette.tileStroke.withAlphaComponent(0.55)
 
         // Wildcard override: purple fill with "?" glyph
         if kind == .wildcard && !isHighlightedState {
@@ -303,36 +328,28 @@ final class TileNode: SKShapeNode {
             depthNode.fillColor = ParchmentTheme.Palette.tileDepth
 
         case .freshLocked:
-            fillColor = mixColor(
-                ParchmentTheme.Palette.tileFill,
-                with: SKColor(red: 0.68, green: 0.79, blue: 0.94, alpha: 1.0),
-                fraction: 0.23
-            )
+            fillColor = ParchmentTheme.Palette.tileFill
             strokeColor = isHintedState
                 ? ParchmentTheme.Palette.tileHint
-                : SKColor(red: 0.30, green: 0.50, blue: 0.75, alpha: 1.0)
+                : ParchmentTheme.Palette.tileStroke
             letterLabel.fontColor = ParchmentTheme.Palette.tileText
             setValueLabelColors(
                 main: ParchmentTheme.Palette.tileValue,
                 shadow: ParchmentTheme.Palette.tileValueShadow.withAlphaComponent(0.82)
             )
-            depthNode.fillColor = SKColor(red: 0.58, green: 0.72, blue: 0.90, alpha: 1.0)
+            depthNode.fillColor = ParchmentTheme.Palette.tileDepth
 
         case .freshUnlocked:
-            fillColor = mixColor(
-                ParchmentTheme.Palette.tileFill,
-                with: SKColor(red: 0.79, green: 0.80, blue: 0.82, alpha: 1.0),
-                fraction: 0.18
-            )
+            fillColor = ParchmentTheme.Palette.tileFill
             strokeColor = isHintedState
                 ? ParchmentTheme.Palette.tileHint
-                : SKColor(red: 0.45, green: 0.47, blue: 0.52, alpha: 1.0)
+                : ParchmentTheme.Palette.tileStroke
             letterLabel.fontColor = ParchmentTheme.Palette.tileText
             setValueLabelColors(
                 main: ParchmentTheme.Palette.tileValue,
                 shadow: ParchmentTheme.Palette.tileValueShadow.withAlphaComponent(0.80)
             )
-            depthNode.fillColor = SKColor(red: 0.74, green: 0.76, blue: 0.79, alpha: 1.0)
+            depthNode.fillColor = ParchmentTheme.Palette.tileDepth
         }
 
         updateBadgeAppearance()
@@ -350,18 +367,11 @@ final class TileNode: SKShapeNode {
             badgeNode.isHidden = true
 
         case .freshLocked:
-            badgeNode.isHidden = false
-            badgeNode.fillColor = ParchmentTheme.Palette.tileLockedBadgeFill
-            badgeNode.strokeColor = ParchmentTheme.Palette.tileLockedBadgeStroke
-            badgeLabel.fontColor = ParchmentTheme.Palette.tileLockedBadgeText
-            badgeLabel.text = "L"
+            badgeNode.isHidden = true
 
         case .freshUnlocked:
-            badgeNode.isHidden = false
-            badgeNode.fillColor = ParchmentTheme.Palette.tileUnlockedBadgeFill
-            badgeNode.strokeColor = ParchmentTheme.Palette.tileUnlockedBadgeStroke
-            badgeLabel.fontColor = ParchmentTheme.Palette.tileUnlockedBadgeText
-            badgeLabel.text = "/"
+            badgeNode.isHidden = true
+            badgeLabel.text = nil
         }
     }
 

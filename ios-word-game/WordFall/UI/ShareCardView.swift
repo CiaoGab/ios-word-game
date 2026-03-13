@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 struct ShareCardView: View {
-    static let exportSize = CGSize(width: 1080, height: 1350)
+    static let exportSize = CGSize(width: 1200, height: 630)
 
     let snapshot: RunSummarySnapshot
 
@@ -10,8 +10,8 @@ struct ShareCardView: View {
         ZStack {
             LinearGradient(
                 colors: [
-                    Color(hex: 0xF3F4F6),
-                    Color(hex: 0xE6E8EC)
+                    Color(hex: 0xF8FAFC),
+                    Color(hex: 0xE5E7EB)
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -19,22 +19,21 @@ struct ShareCardView: View {
 
             decorativePattern
 
-            RoundedRectangle(cornerRadius: 52, style: .continuous)
+            RoundedRectangle(cornerRadius: 36, style: .continuous)
                 .fill(ParchmentTheme.Roguelike.Palette.cardBackground)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 52, style: .continuous)
-                        .stroke(ParchmentTheme.Roguelike.Palette.tileStroke, lineWidth: 4)
+                    RoundedRectangle(cornerRadius: 36, style: .continuous)
+                        .stroke(ParchmentTheme.Roguelike.Palette.tileStroke, lineWidth: 3)
                 )
-                .padding(84)
-                .shadow(color: Color.black.opacity(0.12), radius: 34, x: 0, y: 20)
+                .padding(34)
+                .shadow(color: Color.black.opacity(0.12), radius: 18, x: 0, y: 10)
 
-            VStack(spacing: 40) {
-                header
-                scoreBlock
-                detailsBlock
+            HStack(alignment: .top, spacing: 32) {
+                leftColumn
+                rightColumn
             }
-            .padding(.horizontal, 130)
-            .padding(.vertical, 160)
+            .padding(.horizontal, 74)
+            .padding(.vertical, 58)
         }
         .frame(width: ShareCardView.exportSize.width, height: ShareCardView.exportSize.height)
     }
@@ -43,93 +42,133 @@ struct ShareCardView: View {
         ZStack {
             Circle()
                 .fill(ParchmentTheme.Roguelike.Palette.goldAccent.opacity(0.08))
-                .frame(width: 460, height: 460)
-                .offset(x: 350, y: -470)
+                .frame(width: 360, height: 360)
+                .offset(x: 420, y: -250)
 
             Circle()
                 .fill(ParchmentTheme.Roguelike.Palette.darkButton.opacity(0.05))
-                .frame(width: 420, height: 420)
-                .offset(x: -370, y: 470)
+                .frame(width: 320, height: 320)
+                .offset(x: -460, y: 260)
         }
     }
 
-    private var header: some View {
-        VStack(spacing: 14) {
+    private var leftColumn: some View {
+        VStack(alignment: .leading, spacing: 26) {
             Text("WordFall")
-                .font(.system(size: 112, weight: .black, design: .rounded))
+                .font(.system(size: 78, weight: .black, design: .rounded))
                 .foregroundStyle(ParchmentTheme.Roguelike.Palette.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
 
             Text("RUN SUMMARY")
-                .font(.system(size: 40, weight: .heavy, design: .rounded))
-                .tracking(4)
+                .font(.system(size: 27, weight: .heavy, design: .rounded))
+                .tracking(2.6)
                 .foregroundStyle(ParchmentTheme.Roguelike.Palette.goldAccent)
 
-            Text(snapshot.wonRun ? "Act 3 Complete" : "Run Ended")
-                .font(.system(size: 38, weight: .semibold, design: .rounded))
+            Text(snapshot.wonRun ? "Run Complete" : "Run Ended")
+                .font(.system(size: 34, weight: .semibold, design: .rounded))
                 .foregroundStyle(ParchmentTheme.Roguelike.Palette.textSecondary)
+
+            progressBlock
+
+            Spacer(minLength: 0)
+
+            Text("wordfall")
+                .font(.system(size: 18, weight: .heavy, design: .rounded))
+                .tracking(2.2)
+                .foregroundStyle(ParchmentTheme.Roguelike.Palette.textSecondary.opacity(0.74))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var scoreBlock: some View {
-        VStack(spacing: 10) {
+    private var rightColumn: some View {
+        VStack(alignment: .leading, spacing: 24) {
             Text("TOTAL SCORE")
-                .font(.system(size: 28, weight: .bold, design: .rounded))
-                .tracking(2.5)
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .tracking(1.8)
                 .foregroundStyle(ParchmentTheme.Roguelike.Palette.textSecondary)
 
             Text("\(snapshot.totalScore)")
-                .font(.system(size: 142, weight: .black, design: .rounded).monospacedDigit())
+                .font(.system(size: 92, weight: .black, design: .rounded).monospacedDigit())
                 .foregroundStyle(ParchmentTheme.Roguelike.Palette.goldAccent)
                 .lineLimit(1)
                 .minimumScaleFactor(0.55)
 
-            Text("Boards Cleared \(snapshot.boardsProgressText)")
-                .font(.system(size: 34, weight: .bold, design: .rounded))
-                .foregroundStyle(ParchmentTheme.Roguelike.Palette.textPrimary)
+            VStack(spacing: 0) {
+                detailRow(title: "Rounds Cleared", value: snapshot.roundsProgressText, emphasized: false)
+                Divider().overlay(ParchmentTheme.Roguelike.Palette.tileStroke)
+                detailRow(title: "Best Word", value: bestWordText, emphasized: true)
+                Divider().overlay(ParchmentTheme.Roguelike.Palette.tileStroke)
+                detailRow(title: "Locks Broken", value: "\(snapshot.locksBroken)", emphasized: false)
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(Color.white)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                            .stroke(ParchmentTheme.Roguelike.Palette.tileStroke, lineWidth: 2)
+                    )
+            )
         }
-    }
-
-    private var detailsBlock: some View {
-        VStack(spacing: 0) {
-            detailRow(title: "Locks Broken", value: "\(snapshot.locksBroken)", emphasized: false)
-            Divider().overlay(ParchmentTheme.Roguelike.Palette.tileStroke)
-            detailRow(title: "Words Built", value: "\(snapshot.wordsBuilt)", emphasized: false)
-            Divider().overlay(ParchmentTheme.Roguelike.Palette.tileStroke)
-            detailRow(title: "Best Word", value: bestWordText, emphasized: true)
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 34, style: .continuous)
-                .fill(Color.white)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 34, style: .continuous)
-                        .stroke(ParchmentTheme.Roguelike.Palette.tileStroke, lineWidth: 3)
-                )
-        )
+        .frame(width: 490, alignment: .leading)
     }
 
     private func detailRow(title: String, value: String, emphasized: Bool) -> some View {
         HStack {
             Text(title)
-                .font(.system(size: 34, weight: .semibold, design: .rounded))
+                .font(.system(size: 24, weight: .semibold, design: .rounded))
                 .foregroundStyle(ParchmentTheme.Roguelike.Palette.textSecondary)
             Spacer(minLength: 16)
             Text(value)
-                .font(.system(size: 36, weight: .heavy, design: .rounded).monospacedDigit())
+                .font(.system(size: 26, weight: .heavy, design: .rounded).monospacedDigit())
                 .foregroundStyle(emphasized
                     ? ParchmentTheme.Roguelike.Palette.goldAccent
                     : ParchmentTheme.Roguelike.Palette.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
-        .padding(.horizontal, 34)
-        .padding(.vertical, 30)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 18)
+    }
+
+    private var progressBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("PROGRESS")
+                .font(.system(size: 16, weight: .heavy, design: .rounded))
+                .tracking(1.5)
+                .foregroundStyle(ParchmentTheme.Roguelike.Palette.textSecondary)
+
+            GeometryReader { proxy in
+                let width = max(0, proxy.size.width)
+                let fillWidth = width * progressFraction
+
+                ZStack(alignment: .leading) {
+                    Capsule(style: .continuous)
+                        .fill(ParchmentTheme.Roguelike.Palette.tileStroke.opacity(0.40))
+                    Capsule(style: .continuous)
+                        .fill(ParchmentTheme.Roguelike.Palette.goldAccent)
+                        .frame(width: fillWidth)
+                }
+            }
+            .frame(height: 14)
+
+            Text("R\(snapshot.roundReached) of \(snapshot.totalRounds)")
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .foregroundStyle(ParchmentTheme.Roguelike.Palette.textPrimary)
+        }
+        .frame(width: 420, alignment: .leading)
     }
 
     private var bestWordText: String {
         guard !snapshot.bestWord.isEmpty else { return "—" }
         return "\(snapshot.bestWord.uppercased()) (\(snapshot.bestWordScore))"
+    }
+
+    private var progressFraction: CGFloat {
+        guard snapshot.totalRounds > 0 else { return 0 }
+        let progressRound = max(snapshot.roundReached, snapshot.roundsCleared)
+        let raw = Double(progressRound) / Double(snapshot.totalRounds)
+        return CGFloat(min(max(raw, 0), 1))
     }
 }
 
@@ -234,13 +273,18 @@ private extension UIApplication {
         snapshot: RunSummarySnapshot(
             wonRun: true,
             totalScore: 6230,
-            boardsCleared: 15,
-            totalBoards: 15,
-            boardReached: 15,
+            xpEarned: 982,
+            totalXPAfterRun: 2440,
+            roundsCleared: 50,
+            totalRounds: 50,
+            roundReached: 50,
             locksBroken: 132,
             wordsBuilt: 247,
             bestWord: "REARRANGE",
-            bestWordScore: 450
+            bestWordScore: 450,
+            challengeRoundsCleared: 5,
+            rareLetterWordUsed: true,
+            newUnlocks: [.equipSlot4]
         )
     )
 }

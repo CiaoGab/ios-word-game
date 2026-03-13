@@ -11,15 +11,16 @@ enum HintFinder {
     static func findFreePickHint(
         state: GameState,
         dictionary: WordDictionary,
-        preferredLengths: [Int] = [6, 5, 4]
+        preferredLengths: [Int] = [6, 5, 4],
+        allowedIndices: Set<Int>? = nil
     ) -> HintPath? {
-        let lengths = preferredLengths.filter { (4...8).contains($0) }
+        let lengths = preferredLengths.filter { (Resolver.minWordLen...Resolver.maxWordLen).contains($0) }
         guard !lengths.isEmpty else { return nil }
 
         for length in lengths {
             let candidates = dictionary.words(ofLength: length)
             for word in candidates {
-                if let indices = buildTilePath(for: word, tiles: state.tiles) {
+                if let indices = buildTilePath(for: word, tiles: state.tiles, allowedIndices: allowedIndices) {
                     return HintPath(indices: indices, word: word)
                 }
             }
@@ -51,7 +52,11 @@ enum HintFinder {
         return true
     }
 
-    private static func buildTilePath(for word: String, tiles: [Tile?]) -> [Int]? {
+    private static func buildTilePath(
+        for word: String,
+        tiles: [Tile?],
+        allowedIndices: Set<Int>? = nil
+    ) -> [Int]? {
         let chars = Array(word.uppercased())
         guard !chars.isEmpty else { return nil }
 
@@ -59,6 +64,9 @@ enum HintFinder {
         var wildcardIndices: [Int] = []
 
         for index in tiles.indices {
+            if let allowedIndices, !allowedIndices.contains(index) {
+                continue
+            }
             guard let tile = tiles[index], tile.isLetterTile else { continue }
             if tile.kind == .wildcard {
                 wildcardIndices.append(index)

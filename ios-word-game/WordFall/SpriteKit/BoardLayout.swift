@@ -3,11 +3,28 @@ import CoreGraphics
 struct BoardLayout {
     let rows: Int
     let cols: Int
-    var spacing: CGFloat = 6
-    var padding: CGFloat = 18
+    var spacing: CGFloat
+    var padding: CGFloat
 
     private(set) var tileSize: CGFloat = 42
     private(set) var boardSize: CGSize = .zero
+
+    init(rows: Int, cols: Int) {
+        self.rows = rows
+        self.cols = cols
+
+        switch max(rows, cols) {
+        case ...6:
+            spacing = 5
+            padding = 12
+        case 7:
+            spacing = 5
+            padding = 13
+        default:
+            spacing = 4
+            padding = 10
+        }
+    }
 
     mutating func update(sceneSize: CGSize) {
         let minDimension = min(sceneSize.width, sceneSize.height)

@@ -1,56 +1,95 @@
 import Foundation
 
-enum Scoring {
-
-    // MARK: - Tunables
+/// Step 28 tuning north star:
+/// - supports 4-20 letter submissions with a soft score ceiling for ultra-long words
+struct WordScorer {
 
     enum Tunables {
-        /// Length multipliers applied to the letter-value sum.
-        /// Edit here to rebalance word-length rewards.
-        static let lengthMultipliers: [Int: Double] = [3: 1.0, 4: 1.25, 5: 1.6, 6: 2.0]
-
-        /// Repeat-penalty curve indexed by prior use count (0 = first use → 100%).
-        /// Uses beyond index 4 are capped at the last entry.
-        static let repeatCurve: [Double] = [1.0, 0.7, 0.5, 0.35, 0.25]
-
-        /// Absolute floor for any word score, regardless of penalty.
-        static let minPointsBase: Int = 5
-
-        /// Per-letter floor contribution (adds length * this to minPoints).
-        static let minPointsPerLetter: Int = 2
+        /// Scalar applied to letter sums to align scores with the target ranges.
+        static let letterSumScale: Double = 4.0
+        static let lengthMultipliers: [Int: Double] = [
+            4: 1.00,
+            5: 1.20,
+            6: 1.45,
+            7: 1.75,
+            8: 2.10,
+            9: 2.40,
+            10: 2.70,
+            11: 2.95,
+            12: 3.20,
+            13: 3.40,
+            14: 3.58,
+            15: 3.74,
+            16: 3.88,
+            17: 4.00,
+            18: 4.10,
+            19: 4.18,
+            20: 4.25
+        ]
+        static let repeatPenaltyBySubmissionCount: [Int: Double] = [
+            1: 1.00, 2: 0.75, 3: 0.55
+        ]
+        static let repeatPenaltyFloor: Double = 0.40
+        static let lockBonusPerLock: Int = 20
     }
+
+    static func lengthMultiplier(for length: Int) -> Double {
+        switch length {
+        case ..<4:
+            return 1.0
+        case 20...:
+            return Tunables.lengthMultipliers[20] ?? 4.25
+        default:
+            return Tunables.lengthMultipliers[length] ?? 1.0
+        }
+    }
+
+    /// Repeat penalty from the 1-indexed submission count for a word in the current run.
+    static func repeatMultiplier(forSubmissionCount submissionCount: Int) -> Double {
+        let clamped = max(1, submissionCount)
+        return Tunables.repeatPenaltyBySubmissionCount[clamped] ?? Tunables.repeatPenaltyFloor
+    }
+
+    /// Public helper when you have the number of prior uses (0 = first use).
+    static func repeatMultiplier(forPriorUseCount priorUseCount: Int) -> Double {
+        repeatMultiplier(forSubmissionCount: max(0, priorUseCount) + 1)
+    }
+
+    static func scoreWord(
+        letterSum: Int,
+        length: Int,
+        priorUseCount: Int,
+        lockCount: Int
+    ) -> Int {
+        let lengthAdjusted = Double(letterSum) * Tunables.letterSumScale * lengthMultiplier(for: length)
+        let repeated = (lengthAdjusted * repeatMultiplier(forPriorUseCount: priorUseCount)).rounded()
+        let baseWordScore = max(Int(repeated), 1)
+        return baseWordScore + (max(0, lockCount) * Tunables.lockBonusPerLock)
+    }
+
+    func scoreWord(
+        letters: String,
+        lockCount: Int,
+        wordUseCounts: [String: Int]
+    ) -> Int {
+        let wordKey = letters.uppercased()
+        let priorUseCount = wordUseCounts[wordKey, default: 0]
+        let letterSum = LetterValues.sum(for: wordKey)
+        return Self.scoreWord(
+            letterSum: letterSum,
+            length: wordKey.count,
+            priorUseCount: priorUseCount,
+            lockCount: lockCount
+        )
+    }
+}
+
+enum Scoring {
 
     // MARK: - Core helpers
 
-    /// Length multiplier from the tunable table (defaults to 1.0 for unknown lengths).
     static func lengthMultiplier(for length: Int) -> Double {
-        Tunables.lengthMultipliers[length] ?? 1.0
-    }
-
-    /// Repeat-penalty multiplier. useCount = number of prior submissions (0 = first use).
-    static func repeatMultiplier(useCount: Int) -> Double {
-        let curve = Tunables.repeatCurve
-        return curve[min(useCount, curve.count - 1)]
-    }
-
-    /// Minimum points guaranteed for a word of the given length.
-    /// floor = max(minPointsBase, length * minPointsPerLetter)
-    static func minPoints(length: Int) -> Int {
-        max(Tunables.minPointsBase, length * Tunables.minPointsPerLetter)
-    }
-
-    // MARK: - Primary scoring entry point
-
-    /// Final word score with repeat penalty and floor applied.
-    ///   base     = sum of letter values
-    ///   raw      = round(base × lenMult × repeatMult)
-    ///   final    = max(minPoints(length), raw)
-    ///
-    /// This is the value that should be added to both state.score and
-    /// run.scoreThisBoard on every accepted word.
-    static func wordScore(letterSum: Int, length: Int, useCount: Int) -> Int {
-        let raw = (Double(letterSum) * lengthMultiplier(for: length) * repeatMultiplier(useCount: useCount)).rounded()
-        return max(minPoints(length: length), Int(raw))
+        WordScorer.lengthMultiplier(for: length)
     }
 
     // MARK: - Legacy helpers (used by Resolver for event display; not used for score tracking)

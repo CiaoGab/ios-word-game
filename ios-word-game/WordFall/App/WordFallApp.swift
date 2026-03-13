@@ -20,6 +20,12 @@ struct WordFallApp: App {
     @UIApplicationDelegateAdaptor(AppOrientationDelegate.self) private var appOrientationDelegate
     #endif
 
+    init() {
+        // Pre-warm the audio engine at app launch so the first gameplay interaction
+        // never triggers engine setup. Avoids first-tap latency and init-time crashes.
+        SoundManager.prepare()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

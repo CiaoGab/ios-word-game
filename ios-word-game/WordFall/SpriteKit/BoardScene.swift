@@ -13,6 +13,7 @@ final class BoardScene: SKScene {
     var wildcardPlacingMode: Bool = false
 
     private var layout: BoardLayout
+    private var boardTemplate: BoardTemplate?
     private var tileNodes: [UUID: TileNode] = [:]
     private var tileIDForIndex: [Int: UUID] = [:]
     private let boardBackdrop = SKShapeNode()
@@ -23,7 +24,7 @@ final class BoardScene: SKScene {
     private var hintRings: [SKShapeNode] = []
     private var hintLineNode: SKShapeNode? = nil
     private let hintWaveKey = "hintWave"
-    private let maxSelectionLength = 8
+    private let maxSelectionLength = Resolver.maxWordLen
 
     private var activePathIndices: [Int] = []
     private var currentHintPath: [Int]? = nil
@@ -88,11 +89,7 @@ final class BoardScene: SKScene {
         layout.update(sceneSize: size)
         updateBoardBackdropPath()
         updatePathUI()
-
-        for (tileID, node) in tileNodes {
-            guard let index = tileIDForIndex.first(where: { $0.value == tileID })?.key else { continue }
-            node.position = layout.position(for: index)
-        }
+        refreshTileTransforms()
 
         // Recompute hint line positions after tiles have moved.
         applyHint(currentHintPath)
@@ -108,6 +105,13 @@ final class BoardScene: SKScene {
         updateLayout(for: size)
     }
 
+    func configureTemplate(_ template: BoardTemplate) {
+        boardTemplate = template
+        refreshTileTransforms()
+        updatePathUI()
+        applyHint(currentHintPath)
+    }
+
     func renderBoard(tiles: [Tile?]) {
         for node in tileNodes.values {
             node.removeFromParent()
@@ -118,8 +122,8 @@ final class BoardScene: SKScene {
         for index in tiles.indices {
             guard let tile = tiles[index] else { continue }
             let node = TileNode(tile: tile, size: layout.tileSize)
-            node.position = layout.position(for: index)
             node.zPosition = 10
+            applyTransform(to: node, at: index)
             addChild(node)
             tileNodes[tile.id] = node
             tileIDForIndex[index] = tile.id
@@ -151,6 +155,8 @@ final class BoardScene: SKScene {
     private func run(event: GameEvent, completion: @escaping () -> Void) {
         switch event {
         case .lockBreak(let indices):
+            SoundManager.shared.playLockBreak()
+            Haptics.lockBreak()
             var actions: [(SKNode, SKAction)] = []
 
             for boardIndex in indices {
@@ -206,7 +212,7 @@ final class BoardScene: SKScene {
                 guard let node = tileNodes[move.tileID] else { continue }
                 tileIDForIndex[move.fromIndex] = nil
                 tileIDForIndex[move.toIndex] = move.tileID
-                let destination = layout.position(for: move.toIndex)
+                let destination = displayPosition(for: move.toIndex)
                 actions.append((node, SKAction.move(to: destination, duration: 0.18)))
             }
 
@@ -220,12 +226,14 @@ final class BoardScene: SKScene {
 
             for spawn in spawns {
                 let node = TileNode(tile: spawn.tile, size: layout.tileSize)
-                let destination = layout.position(for: spawn.toIndex)
+                let destination = displayPosition(for: spawn.toIndex)
                 let pitch = layout.tileSize + layout.spacing
                 node.position = CGPoint(x: destination.x, y: destination.y + (pitch * CGFloat(spawn.spawnRowOffset)))
                 node.alpha = 0
-                node.setScale(0.8)
                 node.zPosition = 10
+                applyTransform(to: node, at: spawn.toIndex, preserveScale: false)
+                node.position = CGPoint(x: destination.x, y: destination.y + (pitch * CGFloat(spawn.spawnRowOffset)))
+                node.setScale(node.xScale * 0.8)
                 addChild(node)
 
                 tileNodes[spawn.tile.id] = node
@@ -234,7 +242,7 @@ final class BoardScene: SKScene {
                 let action = SKAction.group([
                     SKAction.move(to: destination, duration: 0.2),
                     SKAction.fadeIn(withDuration: 0.14),
-                    SKAction.scale(to: 1.0, duration: 0.2)
+                    SKAction.scale(to: tileScale(for: spawn.toIndex), duration: 0.2)
                 ])
                 actions.append((node, action))
             }
@@ -292,11 +300,11 @@ final class BoardScene: SKScene {
         if let selectedOffset = activePathIndices.firstIndex(of: index) {
             activePathIndices.remove(at: selectedOffset)
             Haptics.selectionStep()
-            SoundManager.shared.playSelection()
+            SoundManager.shared.playTileDeselect()
         } else if activePathIndices.count < maxSelectionLength {
             activePathIndices.append(index)
             Haptics.selectionStep()
-            SoundManager.shared.playSelection()
+            SoundManager.shared.playTileTap()
         } else {
             Haptics.notifyWarning()
         }
@@ -336,7 +344,7 @@ final class BoardScene: SKScene {
         guard !activePathIndices.isEmpty else { return }
         activePathIndices.removeLast()
         Haptics.selectionStep()
-        SoundManager.shared.playSelection()
+        SoundManager.shared.playTileDeselect()
         updatePathUI()
     }
 
@@ -360,7 +368,7 @@ final class BoardScene: SKScene {
 
         let path = CGMutablePath()
         for (offset, index) in activePathIndices.enumerated() {
-            let point = layout.position(for: index)
+            let point = displayPosition(for: index)
             if offset == 0 {
                 path.move(to: point)
             } else {
@@ -384,7 +392,7 @@ final class BoardScene: SKScene {
         }
 
         guard let path, path.count == 3 else { return }
-        let positions = path.map { layout.position(for: $0) }
+        let positions = path.map { displayPosition(for: $0) }
 
         // Per-tile rings.
         let ringRadius = layout.tileSize * 0.5 + 4
@@ -472,15 +480,11 @@ final class BoardScene: SKScene {
     private func configureBoardBackdrop() {
         boardBackdrop.zPosition = 1
         boardBackdrop.fillColor = .clear
-        boardBackdrop.strokeColor = ParchmentTheme.Palette.boardDashSK
-        boardBackdrop.lineWidth = ParchmentTheme.Stroke.boardDashed
         boardBackdrop.lineJoin = .round
         addChild(boardBackdrop)
 
         boardInset.zPosition = 2
         boardInset.fillColor = .clear
-        boardInset.strokeColor = ParchmentTheme.Palette.boardInnerStrokeSK
-        boardInset.lineWidth = ParchmentTheme.Stroke.boardContainer
         boardInset.lineJoin = .round
         boardInset.glowWidth = 0
         addChild(boardInset)
@@ -489,32 +493,37 @@ final class BoardScene: SKScene {
 
     private func configurePathOverlay() {
         pathOverlay.zPosition = 6
-        pathOverlay.strokeColor = SKColor(red: 0.16, green: 0.44, blue: 0.84, alpha: 0.52)
-        pathOverlay.lineWidth = AppSettings.highContrast ? 9 : 8
+        pathOverlay.strokeColor = StitchTheme.Tile.selectedStroke.withAlphaComponent(0.72)
+        pathOverlay.lineWidth = AppSettings.highContrast ? 9 : 7
         pathOverlay.lineCap = .round
         pathOverlay.lineJoin = .round
-        pathOverlay.glowWidth = 2
+        pathOverlay.glowWidth = AppSettings.reduceMotion ? 0 : 3
         pathOverlay.fillColor = .clear
         addChild(pathOverlay)
     }
 
     private func applyAccessibilitySettings() {
-        boardBackdrop.strokeColor = ParchmentTheme.Palette.boardDashSK
-        boardBackdrop.lineWidth = ParchmentTheme.Stroke.boardDashed
-        boardInset.strokeColor = ParchmentTheme.Palette.boardInnerStrokeSK
-        boardInset.lineWidth = ParchmentTheme.Stroke.boardContainer
-        pathOverlay.lineWidth = AppSettings.highContrast ? 9 : 8
+        boardBackdrop.strokeColor = ParchmentTheme.Palette.boardDashSK.withAlphaComponent(
+            AppSettings.highContrast ? 0.18 : 0.08
+        )
+        boardBackdrop.lineWidth = AppSettings.highContrast ? 1.4 : 0.9
+        boardInset.strokeColor = ParchmentTheme.Palette.boardInnerStrokeSK.withAlphaComponent(
+            AppSettings.highContrast ? 0.12 : 0.05
+        )
+        boardInset.lineWidth = AppSettings.highContrast ? 1.0 : 0.6
+        boardInset.isHidden = !AppSettings.highContrast
+        pathOverlay.lineWidth = AppSettings.highContrast ? 9 : 7
+        pathOverlay.glowWidth = AppSettings.reduceMotion ? 0 : 3
 
         for node in tileNodes.values {
             node.refreshTheme()
         }
 
-        // Re-apply the current hint so reduce-motion can stop/start the loop immediately.
         applyHint(currentHintPath)
     }
 
     private func updateBoardBackdropPath() {
-        let outerInset = layout.spacing * 0.35
+        let outerInset = layout.spacing * 0.45
         let outerRect = CGRect(
             x: -(layout.boardSize.width / 2) - outerInset,
             y: -(layout.boardSize.height / 2) - outerInset,
@@ -528,14 +537,71 @@ final class BoardScene: SKScene {
             cornerHeight: corner,
             transform: nil
         )
-        boardBackdrop.path = outerPath.copy(dashingWithPhase: 0, lengths: [6, 6])
+        boardBackdrop.path = outerPath.copy(dashingWithPhase: 0, lengths: [4, 14])
 
-        let innerRect = outerRect.insetBy(dx: 7, dy: 7)
+        let innerRect = outerRect.insetBy(dx: 10, dy: 10)
         boardInset.path = CGPath(
             roundedRect: innerRect,
             cornerWidth: max(12, corner - 4),
             cornerHeight: max(12, corner - 4),
             transform: nil
         )
+    }
+
+    private func refreshTileTransforms() {
+        for (index, tileID) in tileIDForIndex {
+            guard let node = tileNodes[tileID] else { continue }
+            applyTransform(to: node, at: index)
+        }
+    }
+
+    private func applyTransform(to node: SKNode, at index: Int, preserveScale: Bool = true) {
+        node.position = displayPosition(for: index)
+        let scale = tileScale(for: index)
+        if preserveScale {
+            node.setScale(scale)
+        } else {
+            node.xScale = scale
+            node.yScale = scale
+        }
+    }
+
+    private func displayPosition(for index: Int) -> CGPoint {
+        let base = layout.position(for: index)
+        guard let boardTemplate else { return base }
+
+        switch boardTemplate.visualStyle {
+        case .standard:
+            return base
+        case .triplePoolsBalanced:
+            switch boardTemplate.regionID(for: index) {
+            case 0:
+                return CGPoint(x: base.x - 4, y: base.y + 4)
+            case 1:
+                return CGPoint(x: base.x + 4, y: base.y + 4)
+            case 2:
+                return CGPoint(x: base.x, y: base.y - 4)
+            default:
+                return base
+            }
+        }
+    }
+
+    private func tileScale(for index: Int) -> CGFloat {
+        guard let boardTemplate else { return 1.0 }
+
+        switch boardTemplate.visualStyle {
+        case .standard:
+            return 1.0
+        case .triplePoolsBalanced:
+            switch boardTemplate.regionID(for: index) {
+            case 0, 1:
+                return 0.96
+            case 2:
+                return 1.08
+            default:
+                return 1.0
+            }
+        }
     }
 }
